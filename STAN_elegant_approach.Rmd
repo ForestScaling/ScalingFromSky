@@ -1,0 +1,222 @@
+---
+title: "A more elegant approach to power laws and size abundance"
+author: "Adam Eichenwald"
+date: "2024-11-06"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+This document presents methods to estimate the shape parameter, alpha ($\alpha$), for a Pareto (power law) distribution, focusing on scenarios where only the top portion of the distribution is known. In the context of forest ecology, size-abundance distributions typically follow a power law, where the frequency of tree sizes decreases with increasing diameter at breast height (DBH). This relationship provides essential insights into forest structure, biodiversity, and resource allocation.
+
+The challenge addressed here arises from remote sensing data limitations, which often allow observation of only the largest trees in a forest stand. With this partial data, the goal is to recover an accurate estimate of alpha, which governs the rate at which abundance decreases with size. By understanding the distribution of larger tree DBHs, we aim to infer information about the broader structure of the forest, as these large trees can serve as proxies for the underlying size-abundance dynamics.
+
+In this document, we explore and evaluate several statistical approaches and adjustments that can help improve alpha estimation under double-truncated conditions, where both lower and upper truncation limits restrict the observable portion of the distribution. These methods include various model specifications designed to handle heteroskedasticity, regularization strategies, and techniques for assessing model performance through posterior predictive checks.
+
+Each approach is documented with code and analysis, providing a comprehensive toolkit for estimating alpha in settings where only the largest trees are visible, as might be the case with remote sensing imagery of forest canopies. The methods outlined here can be applied to forest ecology and other fields where similar power-law distributions describe the data but are observable only in part.
+
+# Baseline Method
+
+```{r}
+
+stan_code <- "
+data {
+	int<lower=0> N;                  // Number of observations
+	real<lower=0> x_min;             // Minimum threshold for entire distribution (e.g., 3)
+	real<lower=0> trunc_point;       // Observed data starts at this truncation threshold (e.g., 20)
+	real<lower=trunc_point> trunc_upper;  // Observed data is capped at this upper threshold (e.g., 50)
+	vector<lower=0>[N] x;            // Observed data, limited to range [trunc_point, trunc_upper]
+}
+
+parameters {
+	real<lower=0, upper=5> alpha;    // Shape parameter for Pareto distribution
+}
+
+model {
+	// Prior for alpha
+	alpha ~ lognormal(1, 1);
+
+	// Calculate the truncated cumulative probability in the observed range
+	real p_trunc = pareto_cdf(trunc_upper | x_min, alpha) - pareto_cdf(trunc_point | x_min, alpha);
+
+	// Adjusted likelihood for the double-truncated Pareto distribution
+	for (n in 1:N) {
+		target += pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc);
+	}
+}
+"
+
+
+```
+
+This Stan code fits a truncated Pareto distribution to data within a specified range. Here’s a breakdown of the code’s key components:
+
+1. **Data Block**:
+   - `N`: Number of observations in the dataset.
+   - `x_min`: The minimum threshold for the full Pareto distribution (in this example, 3).
+   - `trunc_point`: The lower bound for the observed data (e.g., 20), meaning that only values at or above this threshold are included.
+   - `trunc_upper`: The upper bound for observed data (e.g., 50), so values above this are excluded.
+   - `x`: A vector containing the observed data, which has already been truncated to fall within `[trunc_point, trunc_upper]`.
+
+2. **Parameters Block**:
+   - `alpha`: The shape parameter for the Pareto distribution, constrained between 0 and 5. This parameter defines the distribution's "tail heaviness," where lower values of `alpha` result in a heavier tail.
+
+3. **Model Block**:
+   - The model assigns a lognormal prior distribution to `alpha`, with mean 1 and standard deviation 1. This prior assumes that `alpha` is more likely to fall in a moderate range, while still allowing flexibility.
+   - The model then calculates `p_trunc`, the probability mass between the truncation points. This uses the cumulative distribution function (`pareto_cdf`) to find the probability that values fall between `trunc_upper` and `trunc_point`, given `alpha` and `x_min`.
+   - Finally, the model adjusts the likelihood for each observation, applying the double-truncation to fit the data effectively. By computing the truncated probability (`p_trunc`) and adjusting each observed likelihood with `pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc)`, the model accounts for only the data in the specified range.
+
+In summary, this code defines a model to estimate the shape parameter (`alpha`) of a Pareto distribution from truncated data, allowing for more accurate fitting in cases where only a subset of data from the entire distribution is observed.
+
+### Compile the model
+
+```{r, warning=FALSE,message=FALSE, echo= FALSE}
+library(rstan)
+library(dplyr)
+library(VGAM)
+library(ggplot2)
+library(data.table)
+```
+
+```{r, echo=FALSE}
+stan_model <- stan_model(model_code = stan_code)
+alphadata <- list()
+
+for (i in 1:100) {
+  x_min = 3
+  n = 2000
+  # Generate a random true alpha between 1.5 and 4.5
+  alpha_true <- runif(1, 0, 5)
+  
+  # Step 1: Simulate data from a Pareto distribution with the random alpha
+  x <- rtruncpareto(n, lower = x_min, upper= 50, shape = alpha_true)
+  
+  trunc_point <- 20
+  # Apply left truncation (keep only values >= trunc_point)
+  x_truncated <- x[x >= trunc_point & x <= 50]
+  
+  if(length(x_truncated) > 10) {
+    # Step 2: Fit the Stan model to the truncated data with error handling
+    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,trunc_upper= 50,
+                      x_min = x_min, x = x_truncated)
+    
+    fit <- tryCatch({
+      sampling(stan_model, data = stan_data, iter = 3000, chains = 2,  refresh = 0)
+    }, error = function(e) {
+      message(paste("Error fitting model at iteration", i, ": ", e$message))
+      return(NULL)  # Return NULL if there's an error
+    })
+    
+    # Proceed only if fit was successful
+    if (!is.null(fit)) {
+      # Step 3: Extract and return the true and estimated alphas
+      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    }
+  } else {
+    next  # Skip to the next iteration if truncated data is insufficient
+  }
+}
+
+
+results_df <- rbindlist(alphadata)
+
+mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
+rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
+cat("Mean Absolute Error:", mean_abs_error, "\n")
+cat("Root Mean Squared Error:", rmse, "\n")
+
+ggplot(results_df, aes(x = alpha_true, y = alpha_est)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values",
+       x = "True Alpha",
+       y = "Estimated Alpha") +
+  theme_minimal()
+
+```
+
+# Addressing Heteroskedasticity in Alpha Estimation
+
+The results of the above code indicate a noticeable heteroskedasticity pattern in alpha estimation. Specifically, while lower true alpha values yield relatively accurate estimates, the variation around the estimated alpha increases as true alpha values rise. This pattern emerges because, as alpha increases, the number of trees with a diameter at breast height (DBH) within our current truncation limits (between 20 and 50) decreases significantly. With a higher alpha, the slope of the size-abundance distribution becomes steeper, meaning there are proportionally more small trees and fewer large ones. Consequently, fewer trees fall within our observable DBH range, leading to increased uncertainty in the alpha estimates.
+
+### Proposed Solution: Dynamic Lower Truncation for Observed DBH Range
+To address this heteroskedasticity, we propose allowing the lower truncation threshold (currently set at 20) to adapt dynamically, moving lower if necessary to incorporate a larger portion of the observed data. This adaptive approach would help maintain a sufficient sample size within the observable range, improving alpha estimation accuracy across a wider range of true alpha values.
+
+Our rationale for this adjustment is rooted in the relationship between forest structure and maximum tree height, a known predictor of alpha. Prior research indicates that plots with taller trees (with greater heights on a log10 scale) tend to have shallower slopes (lower alpha values) for size-abundance distributions. This allometric relationship between tree height and DBH suggests that tall, large trees might obscure smaller trees in remote sensing imagery, particularly in low-alpha forests where large trees are more common. We should therefore see a reduction in these large, covering trees in forests with high alphas, which would make smaller trees visible via remote sensing. A sliding scale of the lower truncation threshold depending on how many trees are visible between the lower threshold and upper threshold should be able to handle this problem.
+
+
+```{r}
+# Set minimum tree count threshold
+min_tree_count <- 50  # or any value that gives stable estimates
+
+# Initialize data storage
+alphadata <- list()
+
+for (i in 1:100) {
+  x_min <- 3
+  n <- 2000
+  # Generate a random true alpha between 1.5 and 4.5
+  alpha_true <- runif(1, 0, 5)
+  
+  # Step 1: Simulate data from a Pareto distribution with the random alpha
+  x <- rtruncpareto(n, lower = x_min, upper = 50, shape = alpha_true)
+  
+  # Initial truncation points
+  trunc_point <- 20
+  trunc_upper <- 50
+  
+  # Apply initial left truncation
+  x_truncated <- x[x >= trunc_point & x <= trunc_upper]
+  
+  # Step 2: Adjust trunc_point if necessary
+  while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
+    trunc_point <- trunc_point - 1  # lower by 1 (or other step size if needed)
+    x_truncated <- x[x >= trunc_point & x <= trunc_upper]
+  }
+  
+  # Proceed if final truncated data meets threshold
+  if (length(x_truncated) >= min_tree_count) {
+    # Step 3: Fit the Stan model to the truncated data
+    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,
+                      trunc_upper = trunc_upper, x_min = x_min, x = x_truncated)
+    
+    fit <- tryCatch({
+      sampling(stan_model, data = stan_data, iter = 3000, chains = 2, refresh = 0)
+    }, error = function(e) {
+      message(paste("Error fitting model at iteration", i, ": ", e$message))
+      return(NULL)
+    })
+    
+    # If successful, store the results
+    if (!is.null(fit)) {
+      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    }
+  }
+}
+
+# Summarize results
+results_df <- do.call(rbind, alphadata)
+
+# Calculate metrics and plot
+mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
+rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
+cat("Mean Absolute Error:", mean_abs_error, "\n")
+cat("Root Mean Squared Error:", rmse, "\n")
+
+ggplot(results_df, aes(x = alpha_true, y = alpha_est)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values\nwith Dynamic Truncation",
+       x = "True Alpha",
+       y = "Estimated Alpha") +
+  theme_minimal()
+
+```
