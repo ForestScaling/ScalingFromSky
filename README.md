@@ -1,4 +1,4 @@
-# Recovering Alpha in Truncated Pareto Distributions for Forest DBH Analysis
+# Recovering Parameters in Truncated Pareto Distributions for Forest DBH Analysis
 This repository provides an RMarkdown file and accompanying code for estimating the parameter alpha in a truncated Pareto (power law) distribution. This project is designed for analyzing size-abundance distributions in forests based on remote sensing of tree diameters at breast height (DBH). Our aim is to accurately recover alpha given only a subset of the distribution—data from the largest observable trees, which are visible through remote sensing.
 
 ### Project Overview
