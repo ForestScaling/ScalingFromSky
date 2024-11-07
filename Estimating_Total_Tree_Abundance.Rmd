@@ -1,0 +1,121 @@
+---
+title: "Estimating_Total_Tree_Abundance"
+author: "Adam Eichenwald"
+date: "2024-11-07"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+stan_code<-"// Stan model code for estimating Ntot
+data {
+  real<lower=0> alpha;           // Shape parameter for power law
+  real<lower=0> x_min;           // Minimum diameter (DBH) threshold
+  real<lower=0> x_upper;         // Maximum diameter (DBH) threshold
+  real<lower=0> i_val;           // Diameter threshold for observed counts
+  int<lower=0> N_obs;            // Observed number of trees within [i_val, x_upper]
+}
+
+parameters {
+  real<lower=0> Ntot;            // Total number of trees, to be estimated
+}
+
+model {
+  // Calculate the expected proportion for trees in [i_val, x_upper]
+  real expected_count_i = (pow(x_min, alpha) / (alpha - 1)) *
+                          (pow(i_val, 1 - alpha) - pow(x_upper, 1 - alpha));
+
+  // Calculate the expected proportion for total trees in [x_min, x_upper]
+  real expected_total_trees = (pow(x_min, alpha) / (alpha - 1)) *
+                              (1 - pow(x_upper, 1 - alpha));
+
+  // Scale factor to adjust the total count based on observed data
+  real scale_factor = expected_count_i / expected_total_trees;
+
+  // Log-likelihood based on observed count with error term
+  target += normal_lpdf(N_obs | Ntot * scale_factor, 1);  // Adjust error term as needed
+
+  // Prior on Ntot, if needed
+  target += normal_lpdf(Ntot | 1000, 100);  // Adjust mean and sd of the prior as needed
+}"
+```
+
+1. **Data Inputs**:
+    - `alpha`: Shape parameter of the power-law distribution, describing the expected size distribution.
+    - `x_min` and `x_upper`: Lower and upper bounds of the diameter range for total count estimation.
+    - `i_val`: The lower bound of the sub-range within which observed data are available.
+    - `N_obs`: The observed number of trees within the interval `[i_val, x_upper]`.
+
+2. **Parameters**:
+    - `Ntot`: Total estimated count of trees across `[x_min, x_upper]`. This is the key parameter the model aims to estimate.
+
+3. **Expected Counts Calculation**:
+    - The code calculates `expected_count_i`, which is the expected proportion of trees that fall within `[i_val, x_upper]` based on the power-law distribution. This value is derived using the formula:
+      \[
+      \text{expected_count_i} = \frac{\text{pow}(x_min, \alpha)}{\alpha - 1} \times (\text{pow}(i_val, 1 - \alpha) - \text{pow}(x_upper, 1 - \alpha))
+      \]
+      where `pow` denotes exponentiation, and the formula captures the cumulative proportion of trees within this sub-range according to the distribution.
+
+    - Similarly, `expected_total_trees` calculates the expected proportion of trees across the entire range `[x_min, x_upper]`, using:
+      \[
+      \text{expected_total_trees} = \frac{\text{pow}(x_min, \alpha)}{\alpha - 1} \times (1 - \text{pow}(x_upper, 1 - \alpha))
+      \]
+
+4. **Scale Factor**:
+    - The `scale_factor` is computed as the ratio of `expected_count_i` to `expected_total_trees`. This factor scales `Ntot` to estimate `N_obs` within `[i_val, x_upper]`. It allows `Ntot` to be adjusted based on the proportion of trees expected within the observed sub-range.
+
+5. **Model Likelihood**:
+    - The model uses a normal log-likelihood function to relate the observed count `N_obs` to the scaled total count, `Ntot * scale_factor`. It assumes a small error term of 1, which can be adjusted based on prior knowledge of variability in the observations:
+      \[
+      \text{target} += \text{normal\_lpdf}(N\_obs | Ntot \times \text{scale\_factor}, 1)
+      \]
+
+6. **Prior on `Ntot`**:
+    - An optional prior for `Ntot` is included, assuming a normal distribution with a mean of 1000 and standard deviation of 100, which serves as a regularizing prior if prior knowledge suggests this range is reasonable.
+
+This model essentially uses the observed data within a specific diameter range to scale up and estimate the total tree population across a broader diameter range, based on the power-law assumption about tree size distribution.
+
+```{r, echo=FALSE}
+library(dplyr)
+library(rstan)
+library(data.table)
+stantest<-fread("stantest.csv")
+# Filter data for the selected plot
+selected_plot_data <- stantest %>%
+  filter(plot_id == "plot_20")
+
+# Define constants and a single threshold
+alpha <- unique(selected_plot_data$alpha_mean)  # Mean alpha for the plot
+x_min <- 3
+x_upper <- 50
+i_val <- 15  # Single threshold value for dbh
+
+# Calculate N_obs for the single threshold i_val
+N_obs <- sum(selected_plot_data$dbh >= i_val & selected_plot_data$dbh <= x_upper)
+
+# Prepare the data list for Stan
+stan_data <- list(
+  alpha = alpha,
+  x_min = x_min,
+  x_upper = x_upper,
+  i_val = i_val,
+  N_obs = N_obs
+)
+
+# Compile and fit the model
+fit <- stan(
+  model_code = stan_code,
+  data = stan_data,
+  iter = 2000,
+  chains = 4,refresh = 0
+)
+
+# View results
+print(fit, pars = c("Ntot"))
+
+```
