@@ -2,7 +2,9 @@
 title: "Simulating Tree Height and Crown Diameter for Forest Monitoring"
 author: "Adam J. Eichenwald"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  word_document: default
+  html_document: default
 ---
 
 ## Introduction
@@ -46,6 +48,14 @@ The following equations were used to estimate tree height and crown diameter:
 ## R Code
 
 The following R code performs the simulation:
+```{r, warning=FALSE,message=FALSE, echo= FALSE}
+library(data.table)
+library(VGAM)
+library(dplyr)
+library(ggplot2)
+library(sf)
+
+```
 
 ```{r}
 
@@ -138,8 +148,8 @@ This approach models tree visibility based on canopy overlap and height, which a
 n_trees <- length(forest_data$DBH)
 
 # Randomly assign tree coordinates (assuming a 100x100 meter plot)
-tree_x <- runif(n_trees, 0, 100)  # Random X coordinates between 0 and 100
-tree_y <- runif(n_trees, 0, 100)  # Random Y coordinates between 0 and 100
+tree_x <- runif(n_trees, 0, 10)  # Random X coordinates between 0 and 100
+tree_y <- runif(n_trees, 0, 10)  # Random Y coordinates between 0 and 100
 
 # Create a data frame for the trees' positions
 tree_coords <- data.frame(
@@ -188,18 +198,146 @@ print(tree_coords_sf%>%
     select(-geometry))
 plot(tree_coords_sf[1])
 ```
+
 ## Simulating Forests with Pareto Distribution and Visibility Classification
 
-In the previous sections, we established a method for calculating tree height and crown diameter from DBH, as well as determining tree visibility based on canopy overlap and height comparisons. With this framework in place, we can now proceed to simulate entire forest plots where tree size and abundance follow a Pareto or power law distribution. This type of distribution is commonly observed in forest ecosystems, where a few large, dominant trees make up the majority of the biomass, while the majority of trees are smaller. By using this distribution, we can model realistic forest dynamics, where tree size varies according to a power law and examine the resulting forest structure.
+In the previous sections, we established a method for calculating tree height and crown diameter from DBH, as well as determining tree visibility based on canopy overlap and height comparisons. With this framework in place, we can now proceed to simulate entire forest plots where tree size and abundance follow a Pareto or power law distribution.
 
 In our simulation, tree sizes and abundance are generated using a Pareto distribution. This distribution has two key parameters: the location (xmin) and the shape parameter $\alpha$. The location parameter, xmin, sets the minimum tree size in the simulation, and in this case, we set xmin to 3 cm to reflect the minimum size of trees that are relevant for the analysis. The shape parameter, $\alpha$, governs the steepness of the distribution—larger values of $\alpha$ indicate a stronger dominance of small trees, with fewer larger trees. By randomly assigning different values of $\alpha$ to each forest simulation, we can explore how varying tree size distributions impact the overall structure of the forest.
 
-Once tree sizes are generated using the Pareto distribution, we calculate the corresponding tree heights and crown diameters, which are based on the DBH values. These attributes are crucial for modeling tree canopy structure, as they will determine the spatial arrangement of trees and how they overlap with each other. Using this information, we simulate multiple forest plots, each with a different combination of tree sizes and abundance patterns.
+Once tree sizes are generated using the Pareto distribution, we calculate the corresponding tree heights and crown diameters, which are based on the DBH values. Using this information, we simulate multiple forest plots, each with a different combination of tree sizes and abundance patterns.
 
 After the trees are generated and their sizes determined, we next apply a method for classifying which trees would be visible from a remote sensing platform. In real-world forests, smaller trees are often obscured by the larger trees that overshadow them. This means that only a subset of trees, typically the larger ones, will be visible in remote sensing imagery. By using the height and canopy overlap rules established earlier, we classify each tree as either "Visible" or "Invisible." A tree is considered visible if it is not overtopped by taller trees or if its canopy is not completely covered by the crowns of neighboring trees. This classification process helps us identify which trees would be detectable by remote sensing, which is crucial for understanding how tree visibility influences data collection in forest monitoring.
 
 With the simulated forests in place and trees classified as visible or invisible, we can now test methods for recovering forest distribution and abundance from incomplete remote sensing data. The overtopping problem—where smaller trees are hidden by the canopy of larger trees—is a common challenge in remote sensing surveys. By simulating multiple forests with different values for alpha and tree size distributions, we can explore how the detectability of trees changes with forest structure. This allows us to evaluate different methods for estimating the full forest distribution and tree abundance, even when some trees are not visible due to canopy overlap.
 
-This simulation framework provides a powerful tool for understanding the dynamics of forest structure and tree visibility. By generating many different forest scenarios, we can better understand the challenges and limitations of remote sensing in forest monitoring. Furthermore, the ability to simulate forests with varying alpha values and tree size distributions allows us to test a wide range of hypotheses and strategies for improving the recovery of forest data in the presence of incomplete information.
+**NOTE: The method for calculating the visible/invisible overlap is different from above. Above it assumes that a tree will be invisible ONLY if it is completely covered by a taller tree. Below allows for a threshold of coverage by all trees above it (so it may not be completely covered by a single tree, but could be covered by a combination of trees to the point where it is virtually invisible**
 
-In the next section, we will explore how to simulate forests with different Pareto distributions and use these simulations to test recovery methods for forest structure and tree abundance.
+```{r, warning=FALSE,message=FALSE, echo= FALSE}
+#Functions for use
+simulate_forest <- function(dbh, p_evergreen = 0.5) {
+  # Function to assign tree types based on probability of evergreen
+  assign_tree_type <- function(dbh, p_evergreen) {
+    sample(c("evergreen", "deciduous"), size = length(dbh), replace = TRUE, prob = c(p_evergreen, 1 - p_evergreen))
+  }
+  
+  # Assign types to each tree
+  tree_types <- assign_tree_type(dbh, p_evergreen)
+  
+  # Coefficients for height-diameter allometry (Hulshof et al., 2015)
+  a_evergreen <- 3.25
+  b_evergreen <- 0.60
+  a_deciduous <- 2.35
+  b_deciduous <- 0.53
+
+  # Function to calculate height based on tree type
+  calculate_height <- function(dbh, type) {
+    if (type == "evergreen") {
+      (a_evergreen * dbh)^b_evergreen
+    } else {
+      (a_deciduous * dbh)^b_deciduous
+    }
+  }
+  
+  # Calculate heights for each tree
+  heights <- mapply(calculate_height, dbh, tree_types)
+  
+  # Parameters for the biome-specific crown diameter equation (Jucker et al., 2017)
+  a_biome <- 0.557  # for biome 0
+  b_biome <- 0.809
+  g_biome <- 0.056
+
+  # Function to calculate crown diameter based on height and DBH
+  calculate_crown_diameter <- function(H, dbh) {
+    CA <- ((dbh / (a_biome * exp(g_biome / 2)))^(1 / b_biome)) / H
+    d_CA <- 2 * sqrt(CA / pi)  # Convert from crown area to diameter
+    d_CA
+  }
+  
+  # Calculate crown diameter for each tree
+  crown_diameters <- mapply(calculate_crown_diameter, heights, dbh)
+  
+  # Compile results into a data frame
+  forest_data <- data.frame(
+    DBH = dbh,
+    Type = tree_types,
+    Height = heights,
+    Crown_Diameter = crown_diameters
+  )
+  
+  return(forest_data)
+}
+
+
+assign_tree_visibility <- function(forest_data, plot_width = 100, plot_height = 100, overlap_threshold = 0.5) {
+  # Number of trees
+  n_trees <- length(forest_data$DBH)
+  
+  # Randomly assign tree coordinates within the specified plot dimensions
+  tree_x <- runif(n_trees, 0, plot_width)
+  tree_y <- runif(n_trees, 0, plot_height)
+
+  # Create a data frame for the trees' positions
+  tree_coords <- data.frame(
+    x = tree_x,
+    y = tree_y,
+    Height = forest_data$Height,
+    Crown_Diameter = forest_data$Crown_Diameter,
+    DBH = forest_data$DBH
+  )
+
+  # Convert to an sf object with a CRS in meters (EPSG:3857)
+  tree_coords_sf <- st_as_sf(tree_coords, coords = c("x", "y"), crs = 3857)
+  
+  # Create buffers based on crown diameter
+  tree_coords_sf <- tree_coords_sf %>%
+    st_buffer(dist = tree_coords_sf$Crown_Diameter / 2)
+  
+  # Initialize a column for visibility classification
+  tree_coords_sf$Visibility <- "Visible"
+
+  # Check for overlaps between trees' buffers (without self-overlap)
+  overlaps <- st_intersects(tree_coords_sf, tree_coords_sf, sparse = FALSE)
+  overlaps <- overlaps & !diag(n_trees)  # Remove self-overlap
+
+  # Check containment and update visibility
+  for (i in 1:n_trees) {
+    # Get the area of the current tree's buffer
+    current_area <- st_area(tree_coords_sf$geometry[i])
+    
+    # Identify trees that intersect with the current tree's buffer and are taller
+    overlapping_trees <- which(overlaps[i, ] & tree_coords_sf$Height > tree_coords_sf$Height[i])
+    
+    if (length(overlapping_trees) > 0) {
+      # Unionize all the intersecting crowns into a single geometry
+      unionized_overlap <- st_union(tree_coords_sf$geometry[overlapping_trees])
+      
+      # Calculate the intersection of the unionized overlap with the current tree's geometry
+      intersection_with_tree <- st_intersection(unionized_overlap, tree_coords_sf$geometry[i])
+      
+      # Calculate the area of the intersection
+      total_overlap_area <- as.numeric(st_area(intersection_with_tree))
+      
+      # Check if the total overlap area exceeds the threshold of the current area
+      if (total_overlap_area / as.numeric(current_area) > overlap_threshold) {
+        tree_coords_sf$Visibility[i] <- "Invisible"
+      }
+    }
+  }
+
+  return(tree_coords_sf)
+}
+
+```
+
+```{r}
+
+# Define the DBH vector in cm
+dbh <- rtruncpareto(n=2000, lower = 3, upper = 50, shape = 2)
+forest_data<-simulate_forest(dbh, p_evergreen = 0.4)
+forest_plot<-assign_tree_visibility(forest_data, plot_width = 50, plot_height = 50, overlap_threshold = 0.7)
+plot(forest_plot[5],key.width = lcm(2.89))
+plot(forest_plot%>%
+       filter(Visibility == "Visible"))
+
+```
