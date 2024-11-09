@@ -1,24 +1,13 @@
 # Recovering Parameters in Truncated Pareto Distributions for Forest DBH Analysis
-This repository provides an RMarkdown file and accompanying code for estimating parameters in a truncated Pareto (power law) distribution. This project is designed for analyzing size-abundance distributions in forests based on remote sensing of tree diameters at breast height (DBH). Our aim is to accurately recover alpha given only a subset of the distribution—data from the largest observable trees, which are visible through remote sensing.
+This repository provides an RMarkdown file and accompanying code for estimating parameters in a truncated Pareto (power law) distribution. The project focuses on analyzing size-abundance distributions in forests based on remote sensing of tree diameters at breast height (DBH), specifically targeting the recovery of the alpha parameter from a subset of the distribution visible via remote sensing.
 
 ### Project Overview
-Forest DBH distributions often follow a power-law pattern, where larger trees are less frequent than smaller ones. Estimating the alpha parameter of this distribution provides critical insights into forest structure and ecological dynamics. However, in remote sensing data, only larger trees may be directly visible due to occlusion from canopy cover. This RMarkdown document demonstrates methods for estimating the entire distribution using Bayesian modeling in Stan.
-
-### Methodology
-The document details the following workflow:
-
-Simulating DBH Data: Using a truncated Pareto distribution with random alpha values, we simulate data to mimic remotely sensed DBH observations.
-Dynamic Truncation Approach: Since higher values of alpha lead to fewer trees in the observable size range, we iteratively adjust the lower truncation point to include additional trees when necessary. This approach improves estimation by maintaining a minimum data sample size.
-
-Bayesian Model Fitting: We use Stan to fit a truncated Pareto distribution model to the observed data, handling both lower and upper truncations (e.g., observable DBHs are restricted to a maximum of 50 cm).
-Evaluation of Estimation Accuracy: After fitting the model, we calculate the mean absolute error and root mean squared error for alpha estimates and visualize the relationship between true and estimated values.
-Key Functions
-
-Dynamic Adjustment of Lower Truncation: To ensure stable estimation, we dynamically adjust the lower truncation threshold (e.g., trunc_point) if the number of observations is insufficient.
-Handling Truncations in Stan: The Stan code models both the lower and upper truncation adjustments, accounting for the limited range of DBH values observable via remote sensing.
+Forest DBH distributions often follow a power-law pattern, with larger trees being less frequent than smaller ones. However, remote sensing data typically only captures the largest observable trees due to canopy cover occlusion. This RMarkdown document demonstrates Bayesian modeling techniques in Stan for estimating the entire distribution from this limited subset.
 
 ### Repository Contents
-STAN_elegant_approach.Rmd: Main RMarkdown file with code and explanations for each step of the alpha estimation process.
+STAN_elegant_approach.Rmd: Main RMarkdown file with code and explanations for each step in the alpha estimation process.
+Simulating_Forests.R: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
+Estimating_Total_Tree_Abundance.R: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
 
 ### Running the Analysis
 #### Prerequisites
@@ -34,4 +23,4 @@ Run the entire RMarkdown document to simulate data, fit the model, and evaluate 
 
 ### Future Directions
 1. Testing the method on real world data
-2. Include additional method to estimate the total number of trees that should be present in the plot, based on observed tree counts and the estimated alpha value
+2. Adjust the forest simulation code. Right now it's based on evergreen and deciduous for one equation and the global biome equation for the other. If we switch to angiosperm and gymnosperm, we can be more specific with both equations.
