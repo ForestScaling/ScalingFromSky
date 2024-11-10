@@ -214,48 +214,93 @@ With the simulated forests in place and trees classified as visible or invisible
 **NOTE: The method for calculating the visible/invisible overlap is different from above. Above it assumes that a tree will be invisible ONLY if it is completely covered by a taller tree. Below allows for a threshold of coverage by all trees above it (so it may not be completely covered by a single tree, but could be covered by a combination of trees to the point where it is virtually invisible**
 
 ```{r, warning=FALSE,message=FALSE, echo= FALSE}
-#Functions for use
-simulate_forest <- function(dbh, p_evergreen = 0.5) {
-  # Function to assign tree types based on probability of evergreen
-  assign_tree_type <- function(dbh, p_evergreen) {
-    sample(c("evergreen", "deciduous"), size = length(dbh), replace = TRUE, prob = c(p_evergreen, 1 - p_evergreen))
+# Define pa vector as provided (parameters taken from itcSegment package, for the Jucker et al. 2017 equations)
+
+# Updated simulate_forest function with biome selection and input validation
+simulate_forest <- function(dbh, p_gymnosperm = 0.5, location, forest_type) {
+  # Define the lookup table for biome-specific parameters
+biome_params <- data.frame(
+  ID = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24),
+  Location = c("Global", "Afrotropic", "Afrotropic", "Australasia", "Australasia", 
+               "Australasia", "Indo-Malaya", "Nearctic", "Nearctic", "Nearctic",
+               "Nearctic", "Nearctic", "Nearctic", "Nearctic", "Nearctic", "Neotropic",
+               "Palearctic", "Palearctic", "Palearctic", "Palearctic", "Palearctic", 
+               "Palearctic", "Palearctic", "Palearctic", "Palearctic"),
+  Forest_Type = c("Global", "Tropical forests", "Woodlands and savannas", "Temperate mixed forests", "Temperate mixed forests",
+                  "Woodlands and savannas", "Tropical forests", "Boreal forests", "Boreal forests", "Temperate coniferous forests",
+                  "Temperate coniferous forests", "Temperate mixed forests", "Temperate mixed forests", "Woodlands and savannas",
+                  "Woodlands and savannas", "Tropical forests", "Boreal forests", "Boreal forests", "Temperate coniferous forests",
+                  "Temperate coniferous forests", "Temperate mixed forests", "Temperate mixed forests", "Tropical forests",
+                  "Woodlands and savannas", "Woodlands and savannas"),
+  Tree_Type = c("Both", "Angiosperm", "Angiosperm", "Angiosperm", "Gymnosperm", 
+                "Angiosperm", "Angiosperm", "Angiosperm", "Gymnosperm", "Angiosperm",
+                "Gymnosperm", "Angiosperm", "Gymnosperm", "Angiosperm", "Gymnosperm",
+                "Angiosperm", "Angiosperm", "Gymnosperm", "Angiosperm", "Gymnosperm",
+                "Angiosperm", "Gymnosperm", "Angiosperm", "Angiosperm", "Gymnosperm"),
+  a_biome = c(0, 0.557, 1.268, 0.769, 0.603, 0.519, 0.486, 0.286, 0.815, 0.343, 
+              0.589, 0.367, 0.861, 0.617, 1.133, 0.591, 0.467, 1.43, 0.273, 0.974,
+              0.694, 1.004, 0.54, 0.91, 1.373),
+  b_biome = c(0, 0.809, 0.75, 0.811, 0.891, 0.89, 0.802, 0.865, 0.771, 0.844, 
+              0.817, 0.887, 0.755, 0.79, 0.745, 0.781, 0.839, 0.649, 0.927, 0.748, 
+              0.73, 0.73, 0.791, 0.738, 0.717),
+  g_biome = c(0, 0.056, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+              0, 0, 0, 0, 0)
+)
+
+# Unique locations and forest types in biome_params for validation
+valid_locations <- unique(biome_params$Location)
+valid_forest_types <- unique(biome_params$Forest_Type)
+
+  # Input validation for location
+  if (!location %in% valid_locations) {
+    stop(paste("Invalid location input. Please choose from the following options:", 
+               paste(valid_locations, collapse = ", ")))
+  }
+  
+  # Input validation for forest_type
+  if (!forest_type %in% valid_forest_types) {
+    stop(paste("Invalid forest type input. Please choose from the following options:", 
+               paste(valid_forest_types, collapse = ", ")))
+  }
+  
+  # Function to assign tree types based on probability of gymnosperm
+  assign_tree_type <- function(dbh, p_gymnosperm) {
+    sample(c("Gymnosperm", "Angiosperm"), size = length(dbh), replace = TRUE, prob = c(p_gymnosperm, 1 - p_gymnosperm))
   }
   
   # Assign types to each tree
-  tree_types <- assign_tree_type(dbh, p_evergreen)
+  tree_types <- assign_tree_type(dbh, p_gymnosperm)
   
-  # Coefficients for height-diameter allometry (Hulshof et al., 2015)
-  a_evergreen <- 3.25
-  b_evergreen <- 0.60
-  a_deciduous <- 2.35
-  b_deciduous <- 0.53
-
+  # Coefficients for height-diameter allometry
+  a_gymnosperm <- 3.21
+  b_gymnosperm <- 0.60
+  a_angiosperm <- 2.37
+  b_angiosperm <- 0.53
+  
   # Function to calculate height based on tree type
   calculate_height <- function(dbh, type) {
-    if (type == "evergreen") {
-      (a_evergreen * dbh)^b_evergreen
+    if (type == "gymnosperm") {
+      (a_gymnosperm * dbh)^b_gymnosperm
     } else {
-      (a_deciduous * dbh)^b_deciduous
+      (a_angiosperm * dbh)^b_angiosperm
     }
   }
   
   # Calculate heights for each tree
   heights <- mapply(calculate_height, dbh, tree_types)
   
-  # Parameters for the biome-specific crown diameter equation (Jucker et al., 2017)
-  a_biome <- 0.557  # for biome 0
-  b_biome <- 0.809
-  g_biome <- 0.056
-
-  # Function to calculate crown diameter based on height and DBH
-  calculate_crown_diameter <- function(H, dbh) {
-    CA <- ((dbh / (a_biome * exp(g_biome / 2)))^(1 / b_biome)) / H
-    d_CA <- 2 * sqrt(CA / pi)  # Convert from crown area to diameter
-    d_CA
+  # Filter for the biome-specific parameters
+  biome_params_subset <- subset(biome_params, Location == location & Forest_Type == forest_type)
+  
+  # Function to calculate crown diameter based on height and DBH, selecting appropriate biome parameters
+  calculate_crown_diameter <- function(H, dbh, type) {
+    params <- subset(biome_params_subset, Tree_Type == type)
+    CA <- ((dbh / (params$a_biome * exp(params$g_biome / 2)))^(1 / params$b_biome)) / H
+    2 * sqrt(CA / pi)
   }
   
-  # Calculate crown diameter for each tree
-  crown_diameters <- mapply(calculate_crown_diameter, heights, dbh)
+  # Calculate crown diameters
+  crown_diameters <- mapply(calculate_crown_diameter, heights, dbh, tree_types)
   
   # Compile results into a data frame
   forest_data <- data.frame(
@@ -267,6 +312,9 @@ simulate_forest <- function(dbh, p_evergreen = 0.5) {
   
   return(forest_data)
 }
+
+# Example usage with input validation
+# simulate_forest(dbh = runif(100, 10, 50), location = "Nearctic", forest_type = "Boreal forests")
 
 
 assign_tree_visibility <- function(forest_data, plot_width = 100, plot_height = 100, overlap_threshold = 0.5) {
@@ -334,10 +382,10 @@ assign_tree_visibility <- function(forest_data, plot_width = 100, plot_height = 
 
 # Define the DBH vector in cm
 dbh <- rtruncpareto(n=2000, lower = 3, upper = 50, shape = 2)
-forest_data<-simulate_forest(dbh, p_evergreen = 0.4)
+forest_data<-simulate_forest(dbh, p_gymnosperm = 0.4, location = "Nearctic", forest_type = "Boreal forests")
 forest_plot<-assign_tree_visibility(forest_data, plot_width = 50, plot_height = 50, overlap_threshold = 0.7)
-plot(forest_plot[5],key.width = lcm(2.89))
-plot(forest_plot%>%
-       filter(Visibility == "Visible"))
+plot(forest_plot)
+plot((forest_plot%>%
+       filter(Visibility == "Visible"))[5],key.width = lcm(2.89))
 
 ```
