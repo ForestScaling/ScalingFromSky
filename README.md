@@ -9,7 +9,7 @@ STAN_elegant_approach.Rmd: RMarkdown file with code and explanations for each st
 
 Simulating_Forests.R: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
 
-![image](https://github.com/user-attachments/assets/8c8d492f-2def-497a-9224-97d408778cc1)
+![image](https://github.com/user-attachments/assets/7a09657a-17ee-440e-bf7f-1df0bf892c7f)
 
 **Fig 1.** _Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last, with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree._
 
