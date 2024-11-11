@@ -1,0 +1,361 @@
+---
+title: "Pipeline for Simulating and Analyzing Forest Data"
+author: "Adam J. Eichenwald"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+In this document, we outline a pipeline to simulate forest data, assess tree visibility for remote sensing, and estimate the alpha parameter of a truncated Pareto distribution using a sliding truncation point. This approach allows us to understand how canopy structure and tree abundance distribution may influence remote sensing measurements and validate whether our model can recover the true alpha values under varying levels of truncation.
+
+## Pipeline Overview
+
+This pipeline involves the following key steps:
+
+1. **Forest Simulation**: We generate a synthetic forest scene based on a specified alpha parameter of the Pareto distribution. Tree attributes, such as diameter at breast height (DBH), height, and crown diameter, are calculated based on biome and tree classification (angiosperm or gymnosperm), giving us realistic forest structure.
+
+2. **Visibility Analysis**: We determine which trees in the simulated forest would be visible from remote sensing. Trees' visibility is influenced by their height, crown diameter, and positioning relative to other trees, allowing us to approximate remote sensing's line of sight within the canopy.
+
+3. **Sliding Truncation Point Model Fitting**: We fit a model to the truncated data, varying the truncation point systematically. This approach aims to determine if the alpha parameter can be accurately recovered from a limited dataset, exploring how truncation affects the estimation process.
+
+Through this document, we will analyze the results to assess the model’s performance in estimating alpha values across different truncation points and tree visibility scenarios.
+
+## Objectives
+
+- Simulate a realistic forest structure with diverse tree attributes.
+- Determine tree visibility for remote sensing applications.
+- Evaluate a sliding truncation point model for estimating alpha from truncated data.
+
+```{r, warning=FALSE,message=FALSE, echo= FALSE}
+library(rstan)
+library(rstantools)
+library(dplyr)
+library(VGAM)
+library(ggplot2)
+library(data.table)
+```
+### Forest Simulation and Data Export
+
+This section of code automates the simulation and storage of forest data files with varying alpha values (shape parameters for DBH distributions). The goal is to generate a specified number of forest datasets (`n_forests`) across a given alpha range, representing different distributions of tree sizes. Each simulated forest reflects a specific tree species composition and forest type, with trees assigned visibility characteristics based on remote sensing parameters.
+
+The function `simulate_and_save_forest` begins by checking if the file for each forest iteration already exists in the output directory. If a file is detected for a given iteration, that iteration is skipped to avoid redundant processing. For any new files, the function generates a random alpha value within the specified range, simulates a forest with DBH values following this distribution, calculates tree visibility, and saves the resulting dataset as a CSV file in the output directory. This allows for efficient reuse of existing files while producing a variety of forest datasets.
+
+```{r}
+# Set parameters
+n_forests <- 500
+alpha_range <- c(0, 5)  # Range for the alpha (shape) parameter
+output_dir <- "simulatedforests/"  # Set the path for saving CSV files
+
+# Create a helper function to generate and save forest data
+simulate_and_save_forest <- function(forest_type, p_gymnosperm, location, output_dir, n_forests = 500) {
+  # Ensure the output directory exists
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# Loop over the number of forests to simulate
+for (i in 1:n_forests) {
+    # Define a generic pattern for checking existing files
+  file_pattern <- paste0("forest_", gsub(" ", " ", forest_type),"_", i, ".csv")
+  existing_files <- list.files(output_dir, pattern = file_pattern, full.names = TRUE)
+
+  # Check if any files match the pattern
+  if (length(existing_files) > 0) {
+    cat("File already exists for iteration", i, "and forest type:", forest_type, "- Skipping\n")
+    next  # Skip to the next iteration if the file exists
+  }
+
+# Define file name and path with the specific alpha value
+file_name <- paste0("forest_", gsub(" ", "_", forest_type), "_alpha_", round(alpha_value, 2), "_", i, ".csv")
+file_path <- file.path(output_dir, file_name)
+  # Generate random alpha (shape) value
+  alpha_value <- runif(1, min = alpha_range[1], max = alpha_range[2])
+
+
+
+    
+    # Simulate DBH values from the truncated Pareto distribution
+    dbh <- rtruncpareto(n = 2000, lower = 3, upper = 50, shape = alpha_value)
+    
+    # Simulate forest with the specified parameters
+    forest_data <- simulate_forest(dbh, p_gymnosperm = p_gymnosperm, location = location, forest_type = forest_type)
+    
+    # Assign tree visibility
+    forest_data <- assign_tree_visibility(forest_data, plot_width = 50, plot_height = 50, overlap_threshold = 0.7)
+    
+    # Add the alpha value to the data frame
+    forest_data$alpha <- alpha_value
+    
+    # Save to CSV
+    write.csv(forest_data %>%
+                data.frame() %>%
+                select(-geometry), file_path, row.names = FALSE)
+    
+    cat("Saved file:", file_name, "\n")
+  }
+}
+```
+
+Two types of forests are generated and saved using the `simulate_and_save_forest` function. Each forest type represents a unique species composition and ecological setting, and these distinctions are reflected in the parameters used for tree simulation:
+
+1. **Temperate Coniferous Forests** – This dataset simulates a forest composed entirely of gymnosperms, located in the Nearctic region. 
+2. **Temperate Mixed Forests** – This dataset simulates a forest with an equal mix of gymnosperms and angiosperms (50/50), also located in the Nearctic region.
+
+These simulations help establish data that varies not only by species composition but also by forest structure, allowing for a broad analysis across forest types under differing alpha values. Each dataset is saved to the output directory for later use.
+
+
+
+```{r}
+# Generate and save forests for temperate coniferous forests (all gymnosperms)
+simulate_and_save_forest(
+  forest_type = "Temperate coniferous forests",
+  p_gymnosperm = 1,  # All gymnosperms
+  location = "Nearctic",
+  output_dir = output_dir
+)
+
+# Generate and save forests for temperate mixed forests (50/50 gymnosperms and angiosperms)
+simulate_and_save_forest(
+  forest_type = "Temperate mixed forests",
+  p_gymnosperm = 0.5,  # 50/50 gymnosperms and angiosperms
+  location = "Nearctic",
+  output_dir = output_dir
+)
+
+```
+### Setting up the Stan Model
+
+In this section, the Stan code is defined to model the truncated Pareto distribution. The goal of this model is to estimate the shape parameter **alpha** for a given dataset of observed tree diameters that are subject to both a lower and upper truncation. The code is structured as follows:
+
+- **Data Block**: Specifies the inputs to the model, including:
+  - `N`: Number of observations.
+  - `x_min`: The minimum threshold of the distribution.
+  - `trunc_point`: The truncation threshold below which data is not observed.
+  - `trunc_upper`: The maximum threshold, above which data is capped.
+  - `x`: The observed data within the truncation limits.
+  
+- **Parameters Block**: Defines the parameter `alpha`, which is the shape parameter for the Pareto distribution. This parameter is constrained to be between 0 and 5.
+
+- **Model Block**: 
+  - A **lognormal prior** is set for `alpha`, reflecting a prior belief that `alpha` is likely to be centered around 1, with some flexibility.
+  - The **likelihood function** is adjusted to account for the truncation of the data. The likelihood is computed using the cumulative distribution function (CDF) of the truncated Pareto distribution, ensuring that the observations are appropriately normalized to the observed range.
+
+This Stan model will be used later in the pipeline to estimate the value of **alpha** from the simulated tree data.
+
+
+```{r}
+
+stan_predict_alpha <-"data {
+	int<lower=0> N;                  // Number of observations
+	real<lower=0> x_min;             // Minimum threshold for entire distribution (e.g., 3)
+	real<lower=0> trunc_point;       // Observed data starts at this truncation threshold (e.g., 20)
+	real<lower=trunc_point> trunc_upper;  // Observed data is capped at this upper threshold (e.g., 50)
+	vector<lower=0>[N] x;            // Observed data, limited to range [trunc_point, trunc_upper]
+}
+
+parameters {
+	real<lower=0, upper=5> alpha;    // Shape parameter for Pareto distribution
+}
+
+model {
+	// Prior for alpha
+	alpha ~ lognormal(1, 1);
+
+	// Calculate the truncated cumulative probability in the observed range
+	real p_trunc = pareto_cdf(trunc_upper | x_min, alpha) - pareto_cdf(trunc_point | x_min, alpha);
+
+	// Adjusted likelihood for the double-truncated Pareto distribution
+	for (n in 1:N) {
+		target += pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc);
+	}
+}
+"
+
+```
+### Step 2: Fitting the Stan Model with Dynamic Truncation
+
+In this section, the pipeline fits the **Stan model** to the observed tree data, with dynamic truncation applied to ensure a sufficient number of data points for robust estimation. Here's an overview of the steps involved:
+
+1. **Minimum Tree Count Threshold**:
+   - The minimum number of trees required (`min_tree_count`) is set to ensure stable estimates. If fewer trees are available after truncation, the model will adjust the truncation point.
+   
+2. **File Handling**:
+   - The code loads the forest data files for a specified **forest type** (e.g., "Temperate coniferous forests") from the output directory.
+   - For each forest file, the following steps are executed.
+
+3. **Initial Truncation and Adjustment**:
+   - The initial truncation threshold (`trunc_point`) is set at 25, and the upper truncation (`trunc_upper`) is set at 50. These values can be adjusted depending on the specific dataset.
+   - The code checks for **visible trees** (based on the visibility attribute) and applies the truncation. If the number of visible trees within the truncation range is below the required threshold, the truncation point is lowered step by step to include more data.
+
+4. **Fitting the Model**:
+   - Once a sufficient number of trees are available, the Stan model is fitted to the truncated data using the `sampling()` function. This model estimates the **alpha** parameter of the truncated Pareto distribution.
+
+5. **Storing and Summarizing Results**:
+   - For each successful fit, the true (`alpha_true`) and estimated (`alpha_est`) alpha values are stored.
+   - A **summary** of the results is generated, including calculating the **mean absolute error** and **root mean squared error (RMSE)** between the true and estimated alpha values.
+
+6. **Visualization**:
+   - A scatter plot is generated to compare the true and estimated alpha values, with a reference line showing perfect estimation. This helps assess the model's performance visually.  The **true alpha** values are placed on the **x-axis**, and the **estimated alpha** values are placed on the **y-axis**, following the recommendations of Gervasio Piñeiro, Susana Perelman, Juan P. Guerschman, and José M. Paruelo in their 2008 paper, *How to evaluate models: Observed vs. predicted or predicted vs. observed?* (Ecological Modelling, Volume 216, Issues 3–4). This approach facilitates an accurate visual assessment of model performance, highlighting deviations between predicted and true values.
+
+This section is critical for evaluating the ability of the Stan model to recover the **alpha** parameter, considering dynamic truncation to handle varying numbers of visible trees across different simulations.
+
+
+```{r}
+# Set minimum tree count threshold
+min_tree_count <- 50  # or any value that gives stable estimates
+stan_model <- stan_model(model_code = stan_predict_alpha)
+
+forest_type = "Temperate coniferous forests"
+simulatedforestlist<-list.files(output_dir, pattern=forest_type, full.names = TRUE)
+
+# Initialize data storage
+alphadata <- list()
+
+for (i in 1:length(simulatedforestlist)) {
+  
+  forest_data_frame <- fread(simulatedforestlist[i])
+  # Initial truncation points
+  trunc_point <- 25
+  trunc_upper <- 50
+  xmin = 3
+  visible_data <- (forest_data_frame%>%
+    filter(Visibility == "Visible"))$DBH
+  alpha_true=forest_data_frame$alpha%>%unique()
+  # Apply initial left truncation
+  x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+  
+  # Step 2: Adjust trunc_point if necessary
+  while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
+    trunc_point <- trunc_point - 1  # lower by 1 (or other step size if needed)
+    x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+  }
+  
+  # Proceed if final truncated data meets threshold
+  if (length(x_truncated) >= min_tree_count) {
+    # Step 3: Fit the Stan model to the truncated data
+    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,
+                      trunc_upper = trunc_upper, x_min = x_min, x = x_truncated)
+    
+    fit <- tryCatch({
+      sampling(stan_model, data = stan_data, iter = 2000, chains = 2, refresh = 0)
+    }, error = function(e) {
+      message(paste("Error fitting model at iteration", i, ": ", e$message))
+      return(NULL)
+    })
+    
+    # If successful, store the results
+    if (!is.null(fit)) {
+      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    }
+  }
+}
+
+# Summarize results
+results_df <- do.call(rbind, alphadata)%>%
+  filter(alpha_true >= 0.5)
+
+# Calculate metrics and plot
+mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
+rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
+cat("Mean Absolute Error:", mean_abs_error, "\n")
+cat("Root Mean Squared Error:", rmse, "\n")
+
+# Fit linear model and summarize results
+lm_model <- lm(alpha_true ~ alpha_est, data = results_df)
+lm_summary <- summary(lm_model)
+
+
+# Print the linear model summary
+cat("Linear Model Summary:\n")
+print(lm_summary)
+
+
+
+ggplot(results_df, aes(x = alpha_est, y = alpha_true)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values\nwith Dynamic Truncation, Coniferous Forest",
+       x ="Estimated Alpha",
+       y =  "True Alpha") +
+  theme_minimal()
+
+```
+
+
+```{r, echo = FALSE}
+
+forest_type = "Temperate mixed forests"
+simulatedforestlist<-list.files(output_dir, pattern=forest_type, full.names = TRUE)
+
+# Initialize data storage
+alphadata <- list()
+
+for (i in 1:length(simulatedforestlist)) {
+  
+  forest_data_frame <- fread(simulatedforestlist[i])
+  # Initial truncation points
+  trunc_point <- 25
+  trunc_upper <- 50
+  xmin = 3
+  visible_data <- (forest_data_frame%>%
+    filter(Visibility == "Visible"))$DBH
+  alpha_true=forest_data_frame$alpha%>%unique()
+  # Apply initial left truncation
+  x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+  
+  # Step 2: Adjust trunc_point if necessary
+  while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
+    trunc_point <- trunc_point - 1  # lower by 1 (or other step size if needed)
+    x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+  }
+  
+  # Proceed if final truncated data meets threshold
+  if (length(x_truncated) >= min_tree_count) {
+    # Step 3: Fit the Stan model to the truncated data
+    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,
+                      trunc_upper = trunc_upper, x_min = x_min, x = x_truncated)
+    
+    fit <- tryCatch({
+      sampling(stan_model, data = stan_data, iter = 2000, chains = 2, refresh = 0)
+    }, error = function(e) {
+      message(paste("Error fitting model at iteration", i, ": ", e$message))
+      return(NULL)
+    })
+    
+    # If successful, store the results
+    if (!is.null(fit)) {
+      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    }
+  }
+}
+
+# Summarize results
+results_df <- do.call(rbind, alphadata)%>%
+  filter(alpha_true >= 0.5)
+
+# Calculate metrics and plot
+mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
+rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
+cat("Mean Absolute Error:", mean_abs_error, "\n")
+cat("Root Mean Squared Error:", rmse, "\n")
+
+# Fit linear model and summarize results
+lm_model <- lm(alpha_true ~ alpha_est, data = results_df)
+lm_summary <- summary(lm_model)
+
+
+# Print the linear model summary
+cat("Linear Model Summary:\n")
+print(lm_summary)
+
+
+
+ggplot(results_df, aes(x = alpha_est, y = alpha_true)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values\nwith Dynamic Truncation, Mixed Forest",
+       x ="Estimated Alpha",
+       y =  "True Alpha") +
+  theme_minimal()
+```
