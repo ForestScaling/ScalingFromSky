@@ -37,3 +37,4 @@ Run the entire RMarkdown document to simulate data, fit the model, and evaluate 
 ### Future Directions
 1. Testing the method on real world data
 2. Incorporate error in the estimate of alpha into future predictions (uncertainty propagation)
+3. Update/spend more time on the estimation of total tree abundance Ntot based on observed tree abundance Nobs and estimated alpha, with uncertainty in alpha incorporated
