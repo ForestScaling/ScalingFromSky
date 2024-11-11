@@ -6,9 +6,14 @@ Forest DBH distributions often follow a power-law pattern, with larger trees bei
 
 ### Repository Contents
 STAN_elegant_approach.Rmd: RMarkdown file with code and explanations for each step in the alpha estimation process.
+
 Simulating_Forests.R: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
+
 Estimating_Total_Tree_Abundance.R: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
+
 simulatedforests: Folder with 500 simulated forests each from Nearctic coniferous forests and Nearctic mixed forests. The alpha used to simulate each forest is in its own column in the csv file, and each tree is marked as either "visible" or "invisible" to an overhead remote sensing platform.
+
+![image](https://github.com/user-attachments/assets/8699beea-ce4d-4200-888c-c2b328571349)
 
 ### Running the Analysis
 #### Prerequisites
