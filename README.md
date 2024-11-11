@@ -19,7 +19,7 @@ simulatedforests: Folder with 500 simulated forests each from Nearctic coniferou
 
 ![image](https://github.com/user-attachments/assets/8699beea-ce4d-4200-888c-c2b328571349)
 
-**Fig. 2.** _Comparison of estimated alpha values for simulated mixed forest data (based on "remote sensing data" to determine tree visibility from above) against the true alpha values for the forest._
+**Fig. 2.** _Comparison of estimated alpha values for simulated mixed forest data (based on "remote sensing data", derived from code that determines which trees are visible from above) against the true alpha values for the forest._
 
 
 ### Running the Analysis
