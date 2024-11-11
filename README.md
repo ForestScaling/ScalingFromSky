@@ -10,6 +10,7 @@ STAN_elegant_approach.Rmd: RMarkdown file with code and explanations for each st
 Simulating_Forests.R: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
 
 ![image](https://github.com/user-attachments/assets/8c8d492f-2def-497a-9224-97d408778cc1)
+
 Fig 1. Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last, with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree.
 
 Estimating_Total_Tree_Abundance.R: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
@@ -17,6 +18,7 @@ Estimating_Total_Tree_Abundance.R: Script for estimating the total number of tre
 simulatedforests: Folder with 500 simulated forests each from Nearctic coniferous forests and Nearctic mixed forests. The alpha used to simulate each forest is in its own column in the csv file, and each tree is marked as either "visible" or "invisible" to an overhead remote sensing platform.
 
 ![image](https://github.com/user-attachments/assets/8699beea-ce4d-4200-888c-c2b328571349)
+
 Fig. 2. Comparison of estimated alpha values for simulated mixed forest data (based on "remote sensing data" to determine tree visibility from above) against the true alpha values for the forest.
 
 
