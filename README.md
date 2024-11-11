@@ -8,6 +8,7 @@ Forest DBH distributions often follow a power-law pattern, with larger trees bei
 STAN_elegant_approach.Rmd: RMarkdown file with code and explanations for each step in the alpha estimation process.
 
 Simulating_Forests.R: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
+
 ![image](https://github.com/user-attachments/assets/8c8d492f-2def-497a-9224-97d408778cc1)
 Fig 1. Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last, with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree.
 
