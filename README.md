@@ -11,7 +11,7 @@ Simulating_Forests.R: Script to simulate forest data for testing the model, usin
 
 ![image](https://github.com/user-attachments/assets/7a09657a-17ee-440e-bf7f-1df0bf892c7f)
 
-**Fig 1.** _Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last, with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree._
+**Fig 1.** _Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last (green = invisible, orange = visible), with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree._
 
 Estimating_Total_Tree_Abundance.R: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
 
