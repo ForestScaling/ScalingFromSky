@@ -1,0 +1,183 @@
+---
+title: "Estimating Alpha in a Truncated Pareto Distribution Using Crown Score-Adjusted
+  Priors"
+author: "Adam Eichenwald"
+output:
+  word_document: default
+  html_document: default
+---
+
+## Introduction
+
+This document outlines our approach to estimating the shape parameter (alpha) for a truncated Pareto distribution using real-world tree data. We initially created a model that successfully estimated alpha using simulated data. However, when applying the same model to real-world segmented tree data, we encountered significant challenges in obtaining reliable estimates for alpha.
+
+The core issue arose from the varying quality of crown score data across plots. In particular, crown scores provided insight into the reliability of tree data in different plots—lower crown scores indicated poor data reliability, while higher scores suggested more reliable data. This disparity led to inconsistent model behavior: in some cases, the model was overly reliant on the data, leading to estimates that were not aligned with known values; in others, the model ignored the data and overemphasized the prior, also leading to suboptimal results.
+
+## Problem
+
+The challenge we faced was that the model worked well with simulated data, where the data was clean and reliable. However, the real-world data, particularly the segmented tree data, was noisy and incomplete. The crown score, which ranged from 0 to 1, provided a measure of how trustworthy each data point was. Trees with low crown scores (below 0.4) indicated high uncertainty in their measurements, while higher crown scores suggested more reliable data.
+
+In our initial model, the prior distribution for alpha was fixed, and the model relied primarily on the observed data to estimate alpha. However, given the variability in crown scores across plots, the model needed a way to adapt the weight of the prior based on the reliability of the data.
+
+### Observations
+
+- **Low crown scores**: Indicate poor-quality or unreliable data. The model should rely more on the prior when the crown score is low.
+- **High crown scores**: Indicate good-quality data, meaning the model should give more weight to the observed data and reduce the reliance on the prior.
+  
+The challenge was to develop a dynamic mechanism where the model could adjust its reliance on the prior based on the crown score, allowing for better handling of noisy or uncertain data.
+
+## Solution
+
+### Approach
+
+To address the issue, we modified the prior distribution for alpha by incorporating a function of the crown score. Specifically, we implemented the following approach:
+
+1. **Prior for Alpha**: 
+   - The prior for alpha was initially informed by the maximum height of trees in the plot. This prior was modeled as a lognormal distribution, with parameters derived from empirical data (from prior studies) relating maximum height to alpha.
+   - The relationship between alpha and maximum height was established through the formula: 
+     \[
+     \text{prior\_mean} = 3.92 - 1.88 \times \log_{10}(\text{max\_height})
+     \]
+   
+2. **Adjustment Based on Crown Score**: 
+   - The crown score was incorporated as a weight that influenced how much the model relied on the prior. For plots with low crown scores, the model would give more weight to the prior, while for plots with high crown scores, the model would rely more on the observed data.
+   - The adjustment was done through a sigmoid function applied to the crown score. This function controlled how much influence the crown score had on the prior, ensuring that:
+     - **Low crown scores** lead to greater reliance on the prior.
+     - **High crown scores** reduce the reliance on the prior, allowing the model to rely more on the data.
+
+3. **Sigmoid Function for Weighting**: 
+   - The weight was calculated using a sigmoid function:
+     \[
+     \text{sigmoid\_prior\_weight} = \frac{1}{1 + \exp(5 \times (\text{mean\_crown\_scor} - 0.5))}
+     \]
+   - This function produces a value close to 1 for high crown scores (suggesting a strong reliance on the data) and close to 0 for low crown scores (indicating greater reliance on the prior).
+
+4. **Implementation in the Model**: 
+   - The prior for alpha was modified dynamically by incorporating both the maximum height and the crown score. 
+   - The model was designed to update alpha’s prior mean according to the following equation (estimated from FIA data):
+     \[
+     \text{prior\_mean} = 3.92 - 1.88 \times \log_{10}(\text{max\_height})
+     \]
+     This adjusted prior was then scaled by the sigmoid-weighted influence, so that in plots with lower crown scores, the prior would play a more significant role.
+
+### Results
+
+The adjustments to the model led to improved estimates of alpha, particularly when the crown score was low. With low-quality data (i.e., low crown score), the model relied more heavily on the prior, leading to more conservative estimates of alpha. For plots with high-quality data (i.e., high crown score), the model adjusted and gave more weight to the observed data, leading to estimates that were closer to the true underlying value of alpha.
+
+This new approach provided a more flexible and data-driven method of handling noisy or uncertain data and allowed the model to better adapt to the quality of the data in each plot.
+
+### Model Code
+
+```{r}
+stan_prior<-"data {
+    int<lower=0> N;                  // Number of observations
+    real<lower=0> x_min;             // Minimum threshold for the distribution (e.g., 3)
+    real<lower=0> trunc_point;       // Observed data starts at this truncation threshold (e.g., 20)
+    real<lower=trunc_point> trunc_upper;  // Observed data is capped at this upper threshold (e.g., 50)
+    vector<lower=0, upper=1>[N] crown_scor; // Average crown score for each plot (between 0 and 1)
+    vector<lower=0>[N] x;            // Observed data, limited to range [trunc_point, trunc_upper]
+    real max_height;                 // Maximum height of trees in the plot
+}
+
+parameters {
+    real<lower=0, upper=5> alpha;    // Shape parameter for Pareto distribution
+}
+
+transformed parameters {
+    // Logistic sigmoid for adjusting prior based on crown score
+    real sigmoid_prior_weight;
+    real prior_mean;
+    
+    // Adjust prior mean based on max height
+    prior_mean = 3.92 - 1.88 * log10(max_height + 1e-6); // Log10 relationship with max_height
+    
+    // Apply the sharp sigmoid function to modify the prior weight based on crown score
+    // Reversed weight: higher crown scores lead to less reliance on the prior
+    sigmoid_prior_weight = 1 / (1 + exp(25 * (mean(crown_scor) - 0.5))); // Increased scaling factor for stronger effect
+    
+    // Adjust prior weight more strongly when crown scores are low
+}
+
+model {
+    // Apply the adjusted prior by modifying its log-likelihood with the prior weight
+    // Tighten the prior even further for stronger influence
+    target += sigmoid_prior_weight * lognormal_lpdf(alpha | prior_mean, 0.05); // Even smaller variance for stronger prior
+    
+    // Calculate the truncated cumulative probability in the observed range
+    real p_trunc = pareto_cdf(trunc_upper | x_min, alpha) - pareto_cdf(trunc_point | x_min, alpha);
+    
+    // Likelihood: Adjusted for the double-truncated Pareto distribution
+    for (n in 1:N) {
+        target += pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc);
+    }
+}
+
+"
+```
+
+## Model Description
+
+This Stan model is designed to estimate the shape parameter (`alpha`) of a truncated Pareto distribution, which is often used to model the distribution of sizes, such as the diameter or mass of trees, in a forest. A core feature of this model is the incorporation of **crown scores**, which reflect the quality or reliability of tree data in different plots. Crown scores range from 0 to 1, where 0 indicates low-quality data and 1 indicates high-quality data. The model adjusts the influence of the **prior** (a belief about `alpha` before seeing the data) based on these crown scores to account for data quality.
+
+Let’s break down how this model works:
+
+### 1. **Data Inputs**:
+
+The model requires the following data:
+- **`N`**: The number of observations (i.e., how many trees are being measured).
+- **`x_min`**: The minimum threshold for the observed data. This is the lower boundary for the dataset and ensures that smaller, irrelevant measurements are excluded (e.g., measurements smaller than 3 cm in diameter).
+- **`trunc_point`**: The truncation threshold for the lower boundary of the observed data. Any data below this point (e.g., 20 cm) is excluded.
+- **`trunc_upper`**: The upper truncation threshold (e.g., 50 cm). This limits the dataset to trees within a specific size range. Data points above this value are excluded.
+- **`crown_scor`**: The crown scores for each plot, representing the quality of the data. Values range from 0 (bad quality) to 1 (good quality). These scores are crucial because they influence how much trust we place in the data versus prior beliefs.
+- **`x`**: The observed data points (such as tree diameters) that fall within the truncation boundaries (from `trunc_point` to `trunc_upper`).
+- **`max_height`**: The maximum height of trees in the plot. This is used to inform the prior for `alpha`, based on a known relationship between tree height and the shape of the size distribution.
+
+### 2. **Prior for `alpha`**:
+
+The model’s estimate for the shape parameter (`alpha`) of the Pareto distribution starts with a **prior** based on existing knowledge. The prior is a **lognormal distribution** and is informed by the **maximum tree height** in the plot. The maximum height of trees in the plot provides a rough estimate for what the shape of the distribution should be.
+
+- The prior mean is calculated as:
+  \[
+  \text{prior\_mean} = 3.92 - 1.88 \times \log_{10}(\text{max\_height})
+  \]
+  This formula connects the maximum height of trees in the plot to the expected shape of the Pareto distribution. The relationship is logarithmic, which means that as the height increases, the prior belief about `alpha` changes gradually.
+
+### 3. **Adjusting the Prior Based on Crown Score**:
+
+To account for the quality of the data, the model adjusts the influence of the prior based on the **crown score** for each plot. Crown scores reflect the reliability of the data, with higher scores indicating more reliable data.
+
+- **The sigmoid function** is applied to the crown scores to calculate a weight that adjusts how much the model relies on the prior versus the observed data:
+  \[
+  \text{sigmoid\_prior\_weight} = \frac{1}{1 + \exp(25 \times (\text{mean\_crown\_scor} - 0.5))}
+  \]
+  The sigmoid function transforms the crown score into a value between 0 and 1:
+  - For plots with **low crown scores** (i.e., poor-quality data), the weight will be **closer to 1**, meaning the model will give more importance to the prior (i.e., the model will trust prior knowledge more than the potentially unreliable data).
+  - For plots with **high crown scores** (i.e., good-quality data), the weight will be **closer to 0**, meaning the model will rely more on the observed data rather than the prior.
+  
+This **sharp sigmoid function** ensures that the influence of the prior is gradually adjusted based on the crown score, with extreme crown scores (near 0 or 1) leading to stronger influence of the prior or observed data, respectively.
+
+### 4. **Prior Tightening**:
+
+The influence of the prior is further **tightened** using a **small variance** (0.05), which makes the prior more influential when it is applied. This prevents the prior from being too weak and ensures it can override noisy data when necessary.
+
+### 5. **Model Likelihood**:
+
+After adjusting the prior for `alpha`, the model uses the **truncated Pareto distribution** to model the observed data:
+- The **truncated cumulative distribution** is calculated to determine the probability that observed data falls within the truncation bounds (`trunc_point` and `trunc_upper`).
+- Then, the **likelihood** of the observed data (`x`) is computed using the **Pareto log-likelihood** (`pareto_lpdf`). This likelihood is adjusted by the cumulative probability in the observed range to account for truncation. The likelihood is the core of the model, and it is used to update the parameter estimates based on the observed data.
+
+### 6. **Final Objective**:
+
+The objective of the model is to find the value of `alpha` that maximizes the likelihood of the observed data, while also incorporating the prior belief about `alpha` and adjusting it based on the quality of the data (through the crown score). The resulting `alpha` reflects both the prior knowledge (based on the maximum tree height) and the quality of the data in each plot (influenced by the crown score).
+
+### 7. **Interpretation of Results**:
+
+- When the crown score is **low**, the model will trust the prior more, leading to an estimate for `alpha` that is more influenced by prior knowledge about tree height.
+- When the crown score is **high**, the model will rely more on the observed data, and `alpha` will be estimated from the data rather than the prior.
+  
+By adjusting the weight of the prior based on crown score, this model allows for better handling of real-world data where some plots may have noisy or uncertain measurements. It also enables the model to incorporate more reliable data where available, leading to more accurate estimates of `alpha`.
+
+### Conclusion:
+
+This Stan model combines prior knowledge (based on tree height) with real-world data (adjusted by crown score) to estimate the shape parameter `alpha` for a truncated Pareto distribution. It dynamically adjusts the prior’s influence based on the quality of the data, allowing the model to be more flexible and robust in the face of varying data quality. This approach improves the accuracy and reliability of parameter estimates, particularly when working with noisy or incomplete real-world data.
+
