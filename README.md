@@ -5,19 +5,19 @@ This repository provides an RMarkdown file and accompanying code for estimating 
 Forest DBH distributions often follow a power-law pattern, with larger trees being less frequent than smaller ones. However, remote sensing data typically only captures the largest observable trees due to canopy cover occlusion. This RMarkdown document demonstrates Bayesian modeling techniques in Stan for estimating the entire distribution from this limited subset.
 
 ### Repository Contents
-STAN_elegant_approach.Rmd: RMarkdown file with code and explanations for each step in the alpha estimation process.
+_STAN_elegant_approach.Rmd_: RMarkdown file with code and explanations for each step in the alpha estimation process.
 
-Simulating_Forests.Rmd: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
+_Simulating_Forests.Rmd_: Script to simulate forest data for testing the model, using distributions based on evergreen/deciduous species and global biome equations.
 
 ![image](https://github.com/user-attachments/assets/7a09657a-17ee-440e-bf7f-1df0bf892c7f)
 
 **Fig 1.** _Example of a small simulated forest, showing the various estimated parameters. Visibility is calculated last (green = invisible, orange = visible), with the green tree invisible to a remote sensing platform due to being covered by a larger, taller tree._
 
-Estimating_Total_Tree_Abundance.Rmd: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
+_Estimating_Total_Tree_Abundance.Rmd_: Script for estimating the total number of trees in a plot from observed data alone. This approach aims to extrapolate from visible trees to an estimate for the entire distribution.
 
-simulatedforests: Folder with 500 simulated forests each from Nearctic coniferous forests and Nearctic mixed forests. The alpha used to simulate each forest is in its own column in the csv file, and each tree is marked as either "visible" or "invisible" to an overhead remote sensing platform.
+_simulatedforests_: Folder with 500 simulated forests each from Nearctic coniferous forests and Nearctic mixed forests. The alpha used to simulate each forest is in its own column in the csv file, and each tree is marked as either "visible" or "invisible" to an overhead remote sensing platform.
 
-Real_world_adjustments_stan.Rmd: Script that adjusts the model created in STAN_elegant_approach.Rmd to estimate alpha from real-world data. As of now, STAN_elegant_approach appears to works well when the canopy is segmented perfectly, but falters significantly when segmentation is so-so. We include a prior based on the maximum height of trees in the plot, which we know is predictive of alpha from Duncanson et al., 2015. The prior is coded to become more informative when uncertainty in the crown segmentation process is high (low crown scores) and less informative when uncertainty is low (high crown scores). It _should_ be that the prior is not considered when the canopy is known perfectly, but this has not yet been tested.   
+_Real_world_adjustments_stan.Rmd_: Script that adjusts the model created in STAN_elegant_approach.Rmd to estimate alpha from real-world data. As of now, STAN_elegant_approach appears to works well when the canopy is segmented perfectly, but falters significantly when segmentation is so-so. We include a prior based on the maximum height of trees in the plot, which we know is predictive of alpha from Duncanson et al., 2015. The prior is coded to become more informative when uncertainty in the crown segmentation process is high (low crown scores) and less informative when uncertainty is low (high crown scores). It _should_ be that the prior is not considered when the canopy is known perfectly, but this has not yet been tested.   
 
 ![image](https://github.com/user-attachments/assets/8699beea-ce4d-4200-888c-c2b328571349)
 
