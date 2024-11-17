@@ -66,7 +66,7 @@ The adjustments to the model led to improved estimates of alpha, particularly wh
 
 This new approach provided a more flexible and data-driven method of handling noisy or uncertain data and allowed the model to better adapt to the quality of the data in each plot.
 
-### Model Code
+### Model Code ### NEEDS CHANGING SO THAT VARIANCE IS IMPACTED BY THE PRIOR! SEE PIPELINE
 
 ```{r}
 stan_prior<-"data {

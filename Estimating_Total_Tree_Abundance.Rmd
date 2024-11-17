@@ -119,3 +119,267 @@ fit <- stan(
 print(fit, pars = c("Ntot"))
 
 ```
+
+## Hierarchical Approach to Estimating \( N_{\text{tot}} \)
+
+The process of estimating the total number of trees (\( N_{\text{tot}} \)) in a plot relies on observed counts of trees above a given diameter threshold (\( i_{\text{val}} \)). However, the choice of \( i_{\text{val}} \) can significantly influence the final estimate of \( N_{\text{tot}} \). This is because different thresholds result in different subsets of observed trees, each contributing varying amounts of information to the estimate. While individual thresholds might provide valid results, relying on a single \( i_{\text{val}} \) may introduce unnecessary bias or uncertainty.
+
+To address this issue, we implement a hierarchical Bayesian approach that integrates information across multiple thresholds (\( i_{\text{val}} \)). By pooling data across thresholds, we aim to reduce the dependence of \( N_{\text{tot}} \) estimates on any single \( i_{\text{val}} \), instead leveraging the combined information to produce more robust and reliable estimates.
+
+This section outlines the hierarchical model we use to account for the variability introduced by different \( i_{\text{val}} \) thresholds. The model estimates \( N_{\text{tot}} \) for each threshold individually while simultaneously fitting a global \( N_{\text{tot}} \) that reflects the entire plot. The hierarchical structure allows threshold-specific estimates to borrow strength from one another, balancing individual observations with global trends.
+
+This approach is motivated by the following considerations:
+
+- Threshold-specific estimates may vary due to the uneven distribution of tree diameters within a plot.
+- The hierarchical model enables us to model these variations explicitly, capturing both threshold-specific effects and the overall trend.
+- By incorporating all thresholds into a single model, we reduce the potential for arbitrary choices of \( i_{\text{val}} \) to disproportionately influence our final estimates.
+
+Below, we present the Stan model and the R workflow used to implement this hierarchical approach. This process involves:
+
+1. Calculating observed counts (\( N_{\text{obs}} \)) for a range of \( i_{\text{val}} \) thresholds.
+2. Defining the hierarchical Bayesian model.
+3. Estimating \( N_{\text{tot}} \) for each plot by integrating data across all thresholds.
+
+
+```{r}
+stan_ntot_hierarch<-"data {
+    real<lower=0> alpha;               // Shape parameter for power law
+    real<lower=0> x_min;               // Minimum DBH threshold
+    real<lower=0> x_upper;             // Maximum DBH threshold
+    int<lower=0> K;                    // Number of thresholds
+    vector<lower=0>[K] i_val;          // Diameter thresholds for observed counts
+    int<lower=0> N_obs[K];             // Observed number of trees for each threshold
+}
+
+parameters {
+    real<lower=0> sigma;  // Observation error
+    real<lower=0> Ntot;
+}
+
+model {
+    sigma ~ normal(0, 5);  // Prior on sigma
+    for (k in 1:K) {
+        // Calculate the expected proportion for trees in [i_val[k], x_upper]
+        real expected_count_k = (pow(x_min, alpha) / (alpha - 1)) *
+                                (pow(i_val[k], 1 - alpha) - pow(x_upper, 1 - alpha));
+        
+        // Calculate the expected proportion for total trees in [x_min, x_upper]
+        real expected_total_trees = (pow(x_min, alpha) / (alpha - 1)) *
+                                    (1 - pow(x_upper, 1 - alpha));
+        
+        // Scale factor to adjust the total count based on observed data
+        real scale_factor = expected_count_k / expected_total_trees;
+        
+        // Log-likelihood based on observed count
+        target += normal_lpdf(N_obs[k] | Ntot * scale_factor, 1);  // Adjust error term as needed
+    }
+    
+    // Prior on Ntot, if needed
+    target += normal_lpdf(Ntot | 1000, 100);  // Adjust mean and sd of the prior as needed
+}
+"
+```
+### Hierarchical Bayesian Model to Address Threshold Variability
+
+To address the issue of how the choice of \( i_{\text{val}} \) (minimum diameter thresholds) affects the final estimated \( N_{\text{tot}} \), we use a hierarchical Bayesian model. This model allows us to combine observed tree counts across multiple thresholds while accounting for variability in the data and the power-law distribution of tree sizes. Below is a detailed explanation of how the model works.
+
+#### Data Block
+
+The **data block** specifies the input data required by the model:
+
+- `alpha`: This parameter defines the shape of the power-law distribution, describing the relationship between tree size and frequency.
+- `x_min`: The minimum diameter threshold to include trees in the analysis (smallest tree size).
+- `x_upper`: The maximum diameter threshold for trees (largest tree size).
+- `K`: The number of thresholds (\( i_{\text{val}} \)) included in the analysis.
+- `i_val`: A vector of thresholds (\( i_{\text{val}} \)), where each value represents a minimum diameter above which trees are counted.
+- `N_obs`: A vector of observed tree counts, where each entry corresponds to the number of trees observed between \( i_{\text{val}}[k] \) and \( x_{\text{upper}} \).
+
+#### Parameters Block
+
+The **parameters block** defines the unknown values that the model will estimate:
+
+- `sigma`: This parameter represents the observation error, accounting for uncertainty in the observed tree counts.
+- `Ntot`: The total number of trees in the plot, which is the main parameter we aim to estimate.
+
+#### Model Block
+
+The **model block** describes the statistical model linking the observed data to the parameters. The steps are as follows:
+
+1. **Prior for `sigma`**:
+   - A normal distribution with a mean of 0 and standard deviation of 5 is used as the prior for `sigma`. This prior allows the model to incorporate variability in the observed tree counts.
+
+2. **Expected Count Calculation**:
+   - For each threshold (\( i_{\text{val}}[k] \)), the model calculates the expected proportion of trees within the diameter range \([i_{\text{val}}[k], x_{\text{upper}}]\). This is done using the **power-law distribution formula**, which depends on the shape parameter `alpha`.
+   - The model also calculates the expected proportion of trees across the entire diameter range \([x_{\text{min}}, x_{\text{upper}}]\).
+
+3. **Scaling Factor**:
+   - A scaling factor is computed for each threshold to adjust the total tree count (\( N_{\text{tot}} \)) based on the observed data. This factor reflects the proportion of the total population that lies within the observed range of diameters.
+
+4. **Log-Likelihood for Observed Counts**:
+   - For each threshold (\( i_{\text{val}}[k] \)), the model relates the observed number of trees (`N_obs[k]`) to the estimated total number of trees (`Ntot`), scaled by the factor calculated above. The relationship is modeled using a normal likelihood, with an error term to account for variability in the observed data.
+
+5. **Prior for `Ntot`**:
+   - A prior distribution is placed on \( N_{\text{tot}} \), assuming a normal distribution with a mean of 1000 and a standard deviation of 100. This provides a starting assumption about the likely range of total tree counts, which can be updated based on the observed data.
+
+#### Summary of the Workflow
+
+The hierarchical model works as follows:
+
+1. For each \( i_{\text{val}} \), the model calculates the expected proportion of trees using the power-law distribution.
+2. It relates the observed counts to \( N_{\text{tot}} \) through a scaling factor that accounts for the specific range defined by \( i_{\text{val}} \) and \( x_{\text{upper}} \).
+3. The observation error (`sigma`) accounts for variability in the observed data.
+4. Bayesian inference combines data from all thresholds to produce a robust estimate of \( N_{\text{tot}} \), reducing the influence of any single threshold on the final result.
+
+This hierarchical approach ensures that the estimate of \( N_{\text{tot}} \) reflects the entire dataset, rather than being biased by the choice of a particular \( i_{\text{val}} \).
+
+### Implementing the Hierarchical Model on Real-World Data
+
+In this section, we apply the hierarchical Bayesian model to real-world data from Harvard Forest. The goal is to estimate the total number of trees (\( N_{\text{tot}} \)) in each plot using observed tree counts across multiple diameter thresholds (\( i_{\text{val}} \)) and a known shape parameter (\( \alpha \)). This method helps account for the variability introduced by different thresholds and provides robust estimates of \( N_{\text{tot}} \).
+
+#### Data Sources and Key Variables
+
+The analysis uses two datasets:
+
+1. **`stantest`**: Contains observed tree data for each plot, including individual tree diameters and the estimated \( \alpha \) value for each plot.
+2. **`HarvFieldfragmented`**: Provides ground-truth data on the total number of trees (\( N_{\text{tot}} \)) in each plot, filtered to include trees with diameters within the range of \([x_{\text{min}}, x_{\text{upper}}]\).
+
+The key variables in the analysis are:
+
+- **`x_min`**: Minimum diameter threshold (\( 3 \) cm), representing the smallest trees included in the analysis.
+- **`x_upper`**: Maximum diameter threshold (\( 50 \) cm), representing the largest trees included.
+- **`i_val`**: A sequence of thresholds between \( 20 \) cm and \( 35 \) cm, specifying the minimum diameters above which trees are counted.
+- **`N_obs`**: Observed tree counts for each plot at each threshold (\( i_{\text{val}} \)).
+
+#### Workflow for Each Plot
+
+For each plot in the dataset:
+
+1. **Filter Data**:
+   - Extract the subset of data corresponding to the current plot.
+   - Ensure there are valid \( \alpha \) values and observed data to proceed.
+
+2. **Calculate Observed Counts**:
+   - For each \( i_{\text{val}} \), compute the number of trees in the diameter range \([i_{\text{val}}, x_{\text{upper}}]\).
+
+3. **Prepare Data for Stan**:
+   - Create a data list containing \( i_{\text{val}} \), \( \alpha \), \( x_{\text{min}} \), \( x_{\text{upper}} \), and \( N_{\text{obs}} \) to pass to the hierarchical Bayesian model.
+
+4. **Fit the Model**:
+   - Use the hierarchical Bayesian model to estimate \( N_{\text{tot}} \) for the plot, incorporating the observed counts across thresholds.
+
+5. **Extract Results**:
+   - Summarize the posterior distribution of \( N_{\text{tot}} \) and compare the estimated value to the true \( N_{\text{tot}} \) from the ground-truth data.
+
+#### Comparing Results
+
+After estimating \( N_{\text{tot}} \) for all plots, we evaluate the model's performance by fitting a linear model to compare the observed (\( N_{\text{tot}}^{\text{obs}} \)) and estimated (\( N_{\text{tot}}^{\text{est}} \)) values. A plot of true vs. estimated \( N_{\text{tot}} \) provides a visual assessment of model accuracy, with a 1:1 line indicating perfect agreement.
+
+
+```{r}
+# Define constants
+x_min <- 3
+x_upper <- 50
+i_val <- seq(20, 35, 5)
+
+# Initialize an empty data frame to store results
+results <- data.frame(
+  plot_id = character(),
+  N_tot_est = numeric(),
+  N_tot_obs = numeric(),
+  stringsAsFactors = FALSE
+)
+# Loop over unique plot IDs
+for (plot in unique(stantest$plot_id)) {
+  
+  # Filter data for the current plot
+  selected_plot_data <- stantest %>% filter(plot_id == plot)
+  
+  # Skip if there's no alpha value for this plot
+  if (nrow(selected_plot_data) == 0) next
+  
+  # Calculate true Ntot from another dataset
+  true_Ntot <- HarvFieldfragmented %>%
+    filter(plot_id == plot) %>%
+    filter(dbh <= x_upper & dbh >= x_min) %>%
+    nrow()
+  
+  # Calculate N_obs for each threshold in i_val
+  N_obs <- sapply(i_val, function(threshold) {
+    sum(selected_plot_data$dbh >= threshold & selected_plot_data$dbh <= x_upper)
+  })
+  
+  # Get alpha value for the current plot
+  alpha <- unique(selected_plot_data$alpha_mean)
+  
+  # Skip if no alpha is available
+  if (length(alpha) == 0) next
+  
+  # Prepare data for Stan
+  stan_data <- list(
+    K = length(i_val),          # Number of groups (thresholds)
+    alpha = alpha,              # Shared alpha
+    x_min = x_min,              # Minimum DBH threshold
+    x_upper = x_upper,          # Maximum DBH threshold
+    i_val = i_val,              # Diameter thresholds for each group
+    N_obs = N_obs               # Observed counts for each group
+  )
+  
+  # Compile and fit the model
+  fit <- tryCatch({
+    stan(
+      model_code = stan_ntot_hierarch, 
+      data = stan_data, 
+      warmup = 6000,
+      iter = 9000, 
+      chains = 4, 
+      refresh = 0
+    )
+  }, error = function(e) {
+    message(paste("Error fitting model for plot", plot, ":", e$message))
+    return(NULL)
+  })
+  
+  # Skip to the next plot if fitting failed
+  if (is.null(fit)) next
+  
+  # Extract and summarize results
+  N_tot_est <- summary(fit, pars = "Ntot")$summary[,"mean"]
+  
+  # Append results to the data frame
+  results <- rbind(
+    results,
+    data.frame(
+      plot_id = plot,
+      N_tot_est = N_tot_est,
+      N_tot_obs = true_Ntot,
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+
+```
+
+```{r}
+# Fit linear model and summarize results for Ntot
+lm_model_ntot <- lm(N_tot_obs ~ N_tot_est, data = results)
+lm_summary_ntot <- summary(lm_model_ntot)
+
+# Print the linear model summary
+cat("Linear Model Summary for Ntot:\n")
+print(lm_summary_ntot)
+
+# Create the plot
+library(ggplot2)
+
+ggplot(results, aes(x = N_tot_est, y = N_tot_obs)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "True vs. Estimated Total Number of Trees (Ntot)",
+    x = "Estimated Ntot",
+    y = "True Ntot"
+  ) +
+  theme_minimal()
+
+```

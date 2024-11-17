@@ -34,6 +34,7 @@ library(dplyr)
 library(VGAM)
 library(ggplot2)
 library(data.table)
+library(itcSegment)
 ```
 ### Forest Simulation and Data Export
 
@@ -199,61 +200,97 @@ In this section, the pipeline fits the **Stan model** to the observed tree data,
 This section is critical for evaluating the ability of the Stan model to recover the **alpha** parameter, considering dynamic truncation to handle varying numbers of visible trees across different simulations.
 
 
-```{r}
-# Set minimum tree count threshold
-min_tree_count <- 50  # or any value that gives stable estimates
+```{r, echo = FALSE}
 stan_model <- stan_model(model_code = stan_predict_alpha)
-
-forest_type = "Temperate coniferous forests"
-simulatedforestlist<-list.files(output_dir, pattern=forest_type, full.names = TRUE)
-
-# Initialize data storage
-alphadata <- list()
-
-for (i in 1:length(simulatedforestlist)) {
+process_forest_simulations <- function(
+  forest_type, 
+  output_dir, 
+  stan_model, 
+  x_min = 3, 
+  trunc_upper = 50, 
+  min_tree_count = 10, 
+  warmup = 1000, 
+  iter = 5000, 
+  chains = 2, 
+  cores = 1, 
+  refresh = 0
+) {
+  # List files matching the forest type
+  simulatedforestlist <- list.files(output_dir, pattern = forest_type, full.names = TRUE)
   
-  forest_data_frame <- fread(simulatedforestlist[i])
-  # Initial truncation points
-  trunc_point <- 25
-  trunc_upper <- 50
-  xmin = 3
-  visible_data <- (forest_data_frame%>%
-    filter(Visibility == "Visible"))$DBH
-  alpha_true=forest_data_frame$alpha%>%unique()
-  # Apply initial left truncation
-  x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+  # Initialize data storage
+  alphadata <- list()
   
-  # Step 2: Adjust trunc_point if necessary
-  while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
-    trunc_point <- trunc_point - 1  # lower by 1 (or other step size if needed)
+  # Loop through each forest simulation file
+  for (i in seq_along(simulatedforestlist)) {
+    forest_data_frame <- fread(simulatedforestlist[i])
+    
+    # Extract relevant data
+    trunc_point <- 20
+    visible_data <- (forest_data_frame %>%
+                       filter(Visibility == "Visible"))$DBH
+    alpha_true <- forest_data_frame$alpha %>% unique()
+    
+    # Apply initial left truncation
     x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
-  }
-  
-  # Proceed if final truncated data meets threshold
-  if (length(x_truncated) >= min_tree_count) {
-    # Step 3: Fit the Stan model to the truncated data
-    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,
-                      trunc_upper = trunc_upper, x_min = x_min, x = x_truncated)
     
-    fit <- tryCatch({
-      sampling(stan_model, data = stan_data, iter = 2000, chains = 2, refresh = 0)
-    }, error = function(e) {
-      message(paste("Error fitting model at iteration", i, ": ", e$message))
-      return(NULL)
-    })
+    # Step 2: Adjust trunc_point if necessary
+    while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
+      trunc_point <- trunc_point - 1  # Decrease by 1
+      x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+    }
     
-    # If successful, store the results
-    if (!is.null(fit)) {
-      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
-      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    # Proceed if final truncated data meets threshold
+    if (length(x_truncated) >= min_tree_count) {
+      # Step 3: Fit the Stan model to the truncated data
+      stan_data <- list(
+        N = length(x_truncated),
+        trunc_point = trunc_point,
+        trunc_upper = trunc_upper,
+        x_min = x_min,
+        x = x_truncated
+      )
+      
+      fit <- tryCatch({
+        sampling(
+          stan_model, 
+          data = stan_data, 
+          iter = iter, 
+          warmup = warmup, 
+          chains = chains, 
+          cores = cores, 
+          refresh = refresh
+        )
+      }, error = function(e) {
+        message(paste("Error fitting model at iteration", i, ": ", e$message))
+        return(NULL)
+      })
+      
+      # If successful, store the results
+      if (!is.null(fit)) {
+        alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+        alphadata[[i]] <- data.frame(
+          alpha_true = alpha_true,
+          alpha_est = alpha_est,
+          trunc_point = trunc_point
+        )
+      }
     }
   }
+  
+  # Summarize results
+  results_df <- do.call(rbind, alphadata) %>%
+    filter(alpha_true >= 0.5)
+  
+  return(results_df)
 }
 
-# Summarize results
-results_df <- do.call(rbind, alphadata)%>%
-  filter(alpha_true >= 0.5)
+```
 
+```{r}
+forest_type = "Temperate mixed forests"
+simulatedforestlist<-list.files(output_dir, pattern=forest_type, full.names = TRUE)
+results_df<-process_forest_simulations(forest_type, output_dir, stan_model, x_min = 3, trunc_upper = 50, min_tree_count = 50)
 # Calculate metrics and plot
 mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
 rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
@@ -280,82 +317,488 @@ ggplot(results_df, aes(x = alpha_est, y = alpha_true)) +
   theme_minimal()
 
 ```
+```{r}
 
-
-```{r, echo = FALSE}
-
-forest_type = "Temperate mixed forests"
+forest_type = "Temperate coniferous forests"
 simulatedforestlist<-list.files(output_dir, pattern=forest_type, full.names = TRUE)
-
-# Initialize data storage
-alphadata <- list()
-
-for (i in 1:length(simulatedforestlist)) {
-  
-  forest_data_frame <- fread(simulatedforestlist[i])
-  # Initial truncation points
-  trunc_point <- 25
-  trunc_upper <- 50
-  xmin = 3
-  visible_data <- (forest_data_frame%>%
-    filter(Visibility == "Visible"))$DBH
-  alpha_true=forest_data_frame$alpha%>%unique()
-  # Apply initial left truncation
-  x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
-  
-  # Step 2: Adjust trunc_point if necessary
-  while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
-    trunc_point <- trunc_point - 1  # lower by 1 (or other step size if needed)
-    x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
-  }
-  
-  # Proceed if final truncated data meets threshold
-  if (length(x_truncated) >= min_tree_count) {
-    # Step 3: Fit the Stan model to the truncated data
-    stan_data <- list(N = length(x_truncated), trunc_point = trunc_point,
-                      trunc_upper = trunc_upper, x_min = x_min, x = x_truncated)
-    
-    fit <- tryCatch({
-      sampling(stan_model, data = stan_data, iter = 2000, chains = 2, refresh = 0)
-    }, error = function(e) {
-      message(paste("Error fitting model at iteration", i, ": ", e$message))
-      return(NULL)
-    })
-    
-    # If successful, store the results
-    if (!is.null(fit)) {
-      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
-      alphadata[[i]] <- data.frame(alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
-    }
-  }
-}
-
-# Summarize results
-results_df <- do.call(rbind, alphadata)%>%
-  filter(alpha_true >= 0.5)
-
+results_df_conifer<-process_forest_simulations(forest_type, output_dir, stan_model, x_min = 3, trunc_upper = 50, min_tree_count = 50)
 # Calculate metrics and plot
-mean_abs_error <- mean(abs(results_df$alpha_true - results_df$alpha_est))
-rmse <- sqrt(mean((results_df$alpha_true - results_df$alpha_est)^2))
+mean_abs_error <- mean(abs(results_df_conifer$alpha_true - results_df_conifer$alpha_est))
+rmse <- sqrt(mean((results_df_conifer$alpha_true - results_df_conifer$alpha_est)^2))
 cat("Mean Absolute Error:", mean_abs_error, "\n")
 cat("Root Mean Squared Error:", rmse, "\n")
 
 # Fit linear model and summarize results
-lm_model <- lm(alpha_true ~ alpha_est, data = results_df)
-lm_summary <- summary(lm_model)
+lm_model_conifer <- lm(alpha_true ~ alpha_est, data = results_df_conifer)
+lm_summary_conifer <- summary(lm_model_conifer)
 
 
 # Print the linear model summary
 cat("Linear Model Summary:\n")
-print(lm_summary)
+print(lm_summary_conifer)
 
 
 
-ggplot(results_df, aes(x = alpha_est, y = alpha_true)) +
+ggplot(results_df_conifer, aes(x = alpha_est, y = alpha_true)) +
   geom_point() + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-  labs(title = "True vs. Estimated Alpha Values\nwith Dynamic Truncation, Mixed Forest",
+  labs(title = "True vs. Estimated Alpha Values\nwith Dynamic Truncation, Coniferous Forest",
        x ="Estimated Alpha",
        y =  "True Alpha") +
   theme_minimal()
+```
+## Estimating Alpha with Real-World Data
+
+In this section, we implement a Bayesian model to estimate the shape parameter \( \alpha \) of a truncated Pareto distribution using real-world forest data. This approach introduces an informative prior that adapts dynamically to crown condition scores and tree height characteristics to address uncertainties in data collection and measurement.
+
+### Background
+
+Field surveys often provide data on tree diameters, which can be used to infer \( \alpha \), a key parameter describing the size-abundance relationship. However, observational biases, such as smaller trees being obscured by canopy cover or variability in sampling effort, can introduce noise and uncertainty into the estimation process. Additionally, the quality of the data can vary across plots, necessitating a flexible modeling approach.
+
+### Model Features
+
+1. **Truncated Likelihood**: The model accounts for the fact that observed tree diameters are limited to a specific range (e.g., 20–50 cm DBH). The likelihood adjusts for this truncation, ensuring accurate inference within the specified range.
+2. **Informative Prior**: A prior on \( \alpha \) incorporates additional knowledge about the site, such as average crown score and maximum tree height:
+   - **Crown Score Adjustment**: Crown scores (ranging between 0 and 1) serve as a proxy for data reliability. The prior is weighted dynamically using a logistic sigmoid function:
+     - **Low Crown Scores**: Indicates potential observational uncertainty, leading to stronger reliance on the prior.
+     - **High Crown Scores**: Suggests reliable data, resulting in less influence from the prior.
+   - **Tree Height Dependency**: Maximum tree height influences the prior mean for \( \alpha \), reflecting known ecological relationships between forest structure and size-abundance patterns.
+3. **Dynamic Prior Weighting**: By modifying the prior’s weight based on observed data characteristics, the model flexibly adapts to variations in data quality and site-specific conditions.
+
+### Objectives
+
+1. To estimate \( \alpha \) for each plot using observed tree diameter data and ecological covariates (crown scores and maximum tree height).
+2. To evaluate the influence of crown score and tree height on the estimated \( \alpha \) values.
+3. To assess how the use of an informative, dynamic prior impacts the estimation process.
+
+The next code chunk implements this model in Stan for the real-world dataset.
+
+```{r, echo = FALSE}
+process_forest_simulations <- function(
+  forest_type, 
+  output_dir, 
+  stan_model, 
+  x_min = 3, 
+  trunc_upper = 50, 
+  min_tree_count = 10, 
+  warmup = 1000, 
+  iter = 2000, 
+  chains = 2, 
+  cores = 1, 
+  refresh = 0
+) {
+  # List files matching the forest type
+  simulatedforestlist <- list.files(output_dir, pattern = forest_type, full.names = TRUE)
+  
+  # Initialize data storage
+  alphadata <- list()
+  
+  # Loop through each forest simulation file
+  for (i in seq_along(simulatedforestlist)) {
+    forest_data_frame <- fread(simulatedforestlist[i])
+    
+    # Add crown_scor column with all values set to 1 (perfect crown score for simulations)
+    forest_data_frame$crown_scor <- 1
+    
+    # Extract relevant data
+    trunc_point <- 20
+    visible_data <- (forest_data_frame %>%
+                       filter(Visibility == "Visible"))$DBH
+    height_data <- (forest_data_frame %>%
+                      filter(Visibility == "Visible"))$Height
+    alpha_true <- forest_data_frame$alpha %>% unique()
+    
+    # Compute the maximum height for the visible trees
+    max_height <- max(height_data, na.rm = TRUE)
+    
+    # Apply initial left truncation
+    x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+    
+    # Step 2: Adjust trunc_point if necessary
+    while (length(x_truncated) < min_tree_count && trunc_point > x_min) {
+      trunc_point <- trunc_point - 1  # Decrease by 1
+      x_truncated <- visible_data[visible_data >= trunc_point & visible_data <= trunc_upper]
+    }
+    
+    # Proceed if final truncated data meets threshold
+    if (length(x_truncated) >= min_tree_count) {
+      # Prepare Stan data with added crown_scor and max_height
+      stan_data <- list(
+        N = length(x_truncated),
+        trunc_point = trunc_point,
+        trunc_upper = trunc_upper,
+        x_min = x_min,
+        x = x_truncated,
+        crown_scor = rep(1, length(x_truncated)),  # Perfect crown scores for simulations
+        max_height = max_height
+      )
+      
+      # Fit the model
+      fit <- tryCatch({
+        sampling(
+          stan_model, 
+          data = stan_data, 
+          iter = iter, 
+          warmup = warmup, 
+          chains = chains, 
+          cores = cores, 
+          refresh = refresh
+        )
+      }, error = function(e) {
+        message(paste("Error fitting model at iteration", i, ": ", e$message))
+        return(NULL)
+      })
+      
+      # If successful, store the results
+      if (!is.null(fit)) {
+        alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+        alphadata[[i]] <- data.frame(
+          alpha_true = alpha_true,
+          alpha_est = alpha_est,
+          trunc_point = trunc_point
+        )
+      }
+    }
+  }
+  
+  # Summarize results
+  results_df <- do.call(rbind, alphadata) %>%
+    filter(alpha_true >= 0.5)
+  
+  return(results_df)
+}
+```
+
+
+```{r}
+### THIS NEEDS FIXING. IT ISN'T WORKING WELL. SO FAR THE REAL_WORLD_ADJUSTMENTS ONE WORKS THE BEST
+stan_prior<-"
+data {
+    int<lower=0> N;                  // Number of observations
+    real<lower=0> x_min;             // Minimum threshold for the distribution (e.g., 3)
+    real<lower=0> trunc_point;       // Observed data starts at this truncation threshold (e.g., 20)
+    real<lower=trunc_point> trunc_upper;  // Observed data is capped at this upper threshold (e.g., 50)
+    vector<lower=0, upper=1>[N] crown_scor; // Average crown score for each plot (between 0 and 1)
+    vector<lower=0>[N] x;            // Observed data, limited to range [trunc_point, trunc_upper]
+    real max_height;                 // Maximum height of trees in the plot
+}
+
+parameters {
+    real<lower=0, upper=5> alpha;    // Shape parameter for Pareto distribution
+}
+
+transformed parameters {
+    real sigmoid_prior_weight;       // Weight for prior based on crown score
+    real prior_mean;                 // Mean of the prior
+    real prior_variance;             // Variance of the prior
+
+    // Adjust prior mean based on max height
+    prior_mean = 3.92 - 1.88 * log10(max_height + 1e-6); // Log10 relationship with max_height
+    
+    // Apply the sigmoid function to determine prior weight based on crown scores
+    // Higher crown scores lead to less reliance on the prior
+    sigmoid_prior_weight = 1 / (1 + exp(25 * (mean(crown_scor) - 0.5)));
+
+    // Dynamic prior variance: Tighter at low alpha, broader at high alpha
+    prior_variance = 0.05 / sigmoid_prior_weight + (0.2 * prior_mean); // Added dependence on prior_mean
+}
+
+model {
+    // Apply the adjusted prior by modifying its log-likelihood with the prior weight
+    target += sigmoid_prior_weight * lognormal_lpdf(alpha | prior_mean, sqrt(prior_variance));
+    
+    // Calculate the truncated cumulative probability in the observed range
+    real p_trunc = pareto_cdf(trunc_upper | x_min, alpha) - pareto_cdf(trunc_point | x_min, alpha);
+    
+    // Likelihood: Adjusted for the double-truncated Pareto distribution
+    for (n in 1:N) {
+        target += pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc);
+    }
+}
+"
+```
+
+```{r}
+stan_prior_model<-stan_model(model_code=stan_prior)
+
+# Use the process_forest_simulations function to get results
+results_df <- process_forest_simulations(
+  forest_type = "Temperate coniferous forests", 
+  output_dir = output_dir, 
+  stan_model = stan_prior_model, 
+  warmup = 50, 
+  iter = 2000, 
+  chains = 2, 
+  cores = 1, 
+  refresh = 0
+)
+
+# Fit linear model and summarize results
+lm_model_conifer <- lm(alpha_true ~ alpha_est, data = results_df)
+lm_summary_conifer <- summary(lm_model_conifer)
+
+# Print the linear model summary
+cat("Linear Model Summary:\n")
+print(lm_summary_conifer)
+
+# Create the plot
+ggplot(results_df, aes(x = alpha_est, y = alpha_true)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "True vs. Estimated Alpha Values\nwith Informative Prior, Coniferous Forest",
+    x = "Estimated Alpha",
+    y = "True Alpha"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+## Recovering Real-World Alpha Values Using NEON Data
+
+In this section, we will attempt to recover the true alpha values for real-world forests using our previously developed method. Specifically, we will apply our model to actual forest data from the **National Ecological Observatory Network (NEON)** to estimate the alpha (shape) parameter of the truncated Pareto distribution for tree diameters. 
+
+### What is NEON?
+
+The **National Ecological Observatory Network (NEON)** is a large-scale, long-term ecological monitoring program that collects data from various ecosystems across the United States. The goal of NEON is to provide high-quality, open-access data to researchers, policymakers, and the public to understand ecological processes and environmental changes. NEON collects data on various environmental variables, including vegetation characteristics, soil conditions, climate, and biodiversity. This data is gathered from over 80 sites that represent different ecological zones, such as forests, grasslands, and wetlands. The NEON dataset includes detailed information on tree measurements, such as tree diameter at breast height (DBH), which we will use in our analysis.
+
+For this analysis, we will focus on using the tree DBH data, particularly tree visibility data, to attempt to recover the alpha value for forests from NEON. We will simulate forest structures using different alpha values (as outlined in previous sections), compare those simulated values to the observed data, and evaluate how well our method can predict the true alpha for the real-world forests.
+
+The goal of this section is to demonstrate the applicability of our model for real-world data and to evaluate its performance against actual ecological data collected through remote sensing and on-the-ground measurements. 
+
+In the following code chunk, we will start by loading the NEON data and preparing it for analysis.
+
+```{r}
+data<-fread("R:\\Adam Eichenwald\\NEON_treesall_filtered_tosubplot.csv")%>%
+  filter(stemDiameter >= 3 & stemDiameter <=50)%>%
+  group_by(individualID)%>%
+  filter(year == max(year))%>%
+  ungroup()
+
+model <- stan_model(file = "density1_simplified.stan")
+for(i in unique(data$siteID)){
+  uniqueplace<-i
+  test <- data %>%
+    mutate(year=year(date))%>%
+    filter(siteID == uniqueplace)%>%
+    tidyr::drop_na(stemDiameter)
+
+    N <- length(test$stemDiameter)
+    x <- test$stemDiameter
+    x_min <- 3
+    x_max <- 50
+    if (N > 1){
+    stan_dat <- list(N = N, x = x, x_min = x_min, x_max = x_max)
+    fit <- sampling(model, data = stan_dat, iter = 9000, warmup = 6000, chains = 4, refresh= 0)
+    
+    data_out <- summary(fit)$summary %>%
+      data.frame() %>%
+      mutate(N_Trees = nrow(test), 
+             siteID = uniqueplace, 
+            corrected_slope = -(mean + 1), variables = rownames(.)) %>%
+      filter(variables == "alpha")
+    fwrite(data_out, paste0("NEON_fullsites_recenttrees\\",uniqueplace,".csv"))
+    }else{
+      next
+    }
+}
+
+
+slopes<-list.files("NEON_fullsites_recenttrees\\", full.names=TRUE)%>%
+  lapply(fread)%>%
+  rbindlist()%>%
+  select(mean, se_mean, sd, N_Trees, siteID)%>%
+  filter(N_Trees >= 100)
+```
+
+This code section processes NEON tree data to estimate the Pareto distribution parameter alpha, which characterizes the size distribution of visible trees at each site. 
+
+After loading the NEON dataset, it filters for trees with diameters between 3 and 50 cm to focus on a specific size range, retaining only the latest measurement for each tree. For each site in the dataset, it then uses the `density1_simplified.stan` model in Stan to fit a truncated Pareto distribution, estimating alpha based on the observed stem diameters at that site. If a site has an insufficient number of observations, it is skipped to ensure reliable parameter estimation. 
+
+The results, including each site’s estimated alpha, total tree count, and corrected slope, are saved as individual CSV files, which are then combined for further analysis. This setup allows us to compare alpha values across sites and understand forest structure patterns represented in the NEON data.
+
+### Processing NEON Shapefiles to Derive DBH
+
+In this section, we iterate over a series of NEON shapefiles to calculate the diameter at breast height (DBH) for each tree. The shapefiles, stored in the `NEON_Weinstein_crownscropped_corrected` directory, contain individual tree information, including crown height and area, from which we can estimate DBH. The code follows several steps to ensure accurate data processing.
+
+1. **Shapefile Reading and Geometry Validation**:
+   Each shapefile is read using the `st_read()` function. Since shapefiles sometimes contain invalid geometries that can interrupt calculations, we check each file for validity using `st_is_valid()`. For any invalid geometries, `st_make_valid()` is applied to repair them, ensuring compatibility with subsequent calculations.
+
+2. **Calculating Perimeter, Diameter, and DBH**:
+   - **Perimeter Calculation**: We compute the crown perimeter for each tree using `st_perimeter()` and convert it to numeric format to facilitate further calculations.
+   - **Diameter Calculation**: We estimate the canopy diameter from the perimeter and area using the equation `Diameter = 0.5 * (sqrt(perimeter^2 - (8 * area)))`. This formula is based on the mathematical relationship between area and perimeter.
+   - **DBH Calculation**: To derive DBH, we use the `dbh()` function from the `itcSegment` package, which implements an allometric equation from Jucker et al. (2017). This equation relates canopy area (`CA`) and height (`H`) to DBH, making it suitable for estimating DBH from remotely sensed crown data.
+
+3. **Data Cleaning and Selection**:
+   After calculating DBH, we filter out records where DBH equals zero to avoid inaccuracies. Then, we select only essential columns (`height`, `area`, `Year`, `Site`, `dbh`) for further analysis.
+
+4. **Combining Data**:
+   Each shapefile is converted to a data frame, excluding the geometry column, and stored in a list. Finally, all data frames are combined into one using `rbindlist()`, creating a comprehensive dataset with DBH, height, area, and site-specific metadata for all trees across the processed shapefiles.
+
+This resulting dataset, `final_data`, provides a standardized summary of tree attributes across the NEON sites, enabling further analysis and validation of tree dimensions and spatial distribution across different forest plots.
+
+```{r}
+
+# Directory containing the shapefiles
+shapefile_directory <- "NEON_Weinstein_crownscropped_corrected"
+shapefiles <- list.files(shapefile_directory, pattern = "\\.shp$", full.names = TRUE)
+subplots<-read_sf("R://Adam Eichenwald//smallest_subplots.shp")
+st_join(shapefile_data, smallestsubplots)%>%
+  group_by(plotID)%>%summarize(n())
+# Initialize an empty list to store the processed data frames
+processed_data <- list()
+
+# Loop over each shapefile
+for (shp_file in shapefiles) {
+  
+  # Read the shapefile
+  shapefile_data <- st_read(shp_file, quiet = TRUE)
+   # Validate and correct geometries if needed
+  if (any(!st_is_valid(shapefile_data))) {
+    shapefile_data <- st_make_valid(shapefile_data)
+  }
+  # Ensure the area and perimeter are in numeric format
+  shapefile_data <- shapefile_data %>%
+    mutate(
+      perimeter = as.numeric(st_perimeter(.)),
+      area = as.numeric(st_area(.))
+    ) %>%
+    # Calculate Diameter and DBH based on your provided formulas
+    mutate(
+      Diameter = 0.5 * (sqrt(perimeter^2 - (8 * area))),
+      dbh = dbh(H = height, CA = Diameter)
+    ) %>%
+    # Select only the required columns
+    select(height, area, Year, Site, dbh)%>%
+    filter(dbh != 0)
+  
+  # Convert to a data frame and store in the list
+  processed_data[[shp_file]] <- as.data.frame(shapefile_data)%>%
+    select(-geometry)
+}
+
+# Combine all processed data frames into one using rbindlist from data.table
+final_data <- rbindlist(processed_data, fill = TRUE)
+head(final_data)
+```
+
+## Alpha Estimation for NEON Sites
+
+This section estimates the alpha parameter for each unique NEON site using the observed DBH (diameter at breast height) values. The workflow adapts the alpha estimation process used in the simulated forest dataset to analyze NEON data. Here’s a summary of the key steps involved:
+
+1. **Setting up Data and Truncation**:
+   - First, we extract unique site names from the NEON data and initialize parameters to control the left (`trunc_point`) and right (`trunc_upper`) truncation limits, which define the DBH range used to estimate alpha. These are set based on tree DBH range, ensuring we focus on a meaningful subset of the data for analysis.
+
+2. **Iterating Through Each Site**:
+   - The code loops over each unique `Site` in the NEON dataset. For each site, it filters the data to extract only the DBH values for trees measured within that site.
+
+3. **Applying Dynamic Truncation**:
+   - Using a starting truncation point (`trunc_point`), we select trees with DBH values within this range. If the resulting dataset contains fewer than a minimum number of trees (`min_tree_count`), `trunc_point` is lowered incrementally to include more trees until this threshold is met.
+
+4. **Fitting the Stan Model**:
+   - For each site with sufficient tree data, the Stan model is used to estimate alpha for the DBH distribution within the truncated range. The model input data (`stan_data`) includes the DBH values for trees in the site as well as the truncation points.
+   - If the model fails to fit due to data issues or convergence problems, the code moves to the next site.
+
+5. **Collecting and Summarizing Results**:
+   - Alpha estimates for each site are stored in a list. These results are combined into a single data frame (`neon_results_df`), where each row corresponds to a site’s estimated alpha value.
+   - If available, true alpha values are compared to the estimates, calculating mean absolute error and root mean squared error (RMSE) to evaluate accuracy. 
+
+6. **Plotting Estimated Alpha Values**:
+   - A scatter plot of estimated versus true alpha values is generated if true values are known. If not, a plot of estimated alpha values across sites is created, visualizing how alpha varies among NEON sites.
+   
+This approach provides an efficient method to analyze the DBH distributions for NEON sites, allowing us to examine forest structure across multiple locations.
+
+```{r}
+# Initialize an empty list to store alpha estimation results for each site
+neon_alphadata <- list()
+# final_data <- list.files("NEON_Weinstein_trees", full.names = TRUE) %>%
+#   lapply(fread) %>%
+#   rbindlist() %>%
+#   mutate(
+#     # Calculate the width and height from the bounding box coordinates
+#     width = right - left,
+#     height = top - bottom,
+#     # Calculate the perimeter using the formula: Perimeter = 2 * (width + height)
+#     perimeter = 2 * (width + height)
+#   ) %>%
+#   # Calculate Diameter and DBH based on your provided formulas
+#   mutate(
+#     Diameter = 0.5 * (sqrt(perimeter^2 - (8 * area))),
+#     dbh = dbh(H = height, CA = Diameter)
+#   ) %>%
+#   # Select only the required columns
+#   select(height, area, Year, Site, dbh) %>%
+#   filter(dbh != 0)
+
+# Define truncation and model parameters
+trunc_upper <- 50
+xmin <- 3
+min_tree_count <- 50  # Adjust this if needed
+
+# Loop over each unique Site in the NEON data
+for (unique_site in unique(final_data$Site)) {
+  
+  # Filter the data for the current site
+  site_data <- final_data %>% 
+    filter(Site == unique_site)
+  alpha_true<-(slopes%>%
+    filter(siteID == unique_site))$mean
+  
+  # If alpha_true doesn't exist (empty result), skip this iteration
+  if (length(alpha_true) == 0) {
+    next
+  }
+  
+  # Extract the DBH column and apply initial truncation points
+  dbh_data <- site_data$dbh
+  trunc_point <- 20  # Initial truncation point
+  
+  # Apply left and right truncation
+  x_truncated <- dbh_data[dbh_data >= trunc_point & dbh_data <= trunc_upper]
+  
+  # Adjust truncation if necessary based on the minimum tree count
+  while (length(x_truncated) < min_tree_count && trunc_point > xmin) {
+    trunc_point <- trunc_point - 1
+    x_truncated <- dbh_data[dbh_data >= trunc_point & dbh_data <= trunc_upper]
+  }
+  
+  # If truncated data meets the tree count threshold, fit the Stan model
+  if (length(x_truncated) >= min_tree_count) {
+    stan_data <- list(N = length(x_truncated), 
+                      trunc_point = trunc_point, 
+                      trunc_upper = trunc_upper, 
+                      x_min = xmin, 
+                      x = x_truncated)
+    
+    # Try fitting the model; catch any errors that arise
+    fit <- tryCatch({
+      sampling(stan_model, data = stan_data, iter=2000, chains = 2, refresh = 0)
+      }, error = function(e) {
+      message(paste("Error fitting model for Site", unique_site, ": ", e$message))
+      return(NULL)
+    })
+    
+    # If fit was successful, extract alpha and store results
+    if (!is.null(fit)) {
+      alpha_est <- summary(fit, pars = "alpha")$summary[,"mean"]
+      neon_alphadata[[unique_site]] <- data.frame(Site = unique_site, alpha_true = alpha_true, alpha_est = alpha_est, trunc_point = trunc_point)
+    }
+  }
+}
+
+# Combine all alpha estimation results into a single data frame
+neon_results_df <- do.call(rbind, neon_alphadata)
+
+# Assuming the results from the Stan model are stored in a data frame called `neon_results_df`
+ggplot(neon_results_df, aes(x = alpha_est, y = alpha_true)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values\nfor NEON Sites",
+       x = "Estimated Alpha",
+       y = "True Alpha") +
+  theme_minimal()+xlim(0,5)+ylim(0,5)+geom_label(aes(label = Site))
+
+
 ```
