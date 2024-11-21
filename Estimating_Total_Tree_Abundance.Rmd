@@ -175,7 +175,7 @@ model {
     }
     
     // Prior on Ntot, if needed
-    target += normal_lpdf(Ntot | 1000, 100);  // Adjust mean and sd of the prior as needed
+    target += normal_lpdf(Ntot | 2000, 100);  // Adjust mean and sd of the prior as needed
 }
 "
 ```
@@ -381,5 +381,184 @@ ggplot(results, aes(x = N_tot_est, y = N_tot_obs)) +
     y = "True Ntot"
   ) +
   theme_minimal()
+
+
+```
+
+
+```{r}
+stan_ntot_hierarch_compile<-stan_model(model_code = stan_ntot_hierarch)
+# Define the function to process each plot and fit the model for multiple data frames
+estimate_tree_abundance_list <- function(data_list, model_code, 
+                                         dbh_col = "DBH", alpha_col = "alpha", 
+                                         x_min = 3, x_upper = 50, i_val = seq(20, 35, 5),
+                                         chains = 4, iter = 9000, warmup = 6000, cores = 1) {
+  
+  # Initialize an empty list to store results
+  all_results <- list()
+  
+  # Loop through each data frame in the list
+  for (data_all in data_list) {
+    data<-data_all%>%
+      filter(Visibility == "Visible")
+    # Initialize an empty data frame for the current data frame's results
+    results <- data.frame(
+      N_tot_est = numeric(),
+      N_tot_obs = numeric(),
+      alpha_true = numeric(),
+      stringsAsFactors = FALSE
+    )
+    
+    # Calculate N_obs for each threshold in i_val
+    N_obs <- sapply(i_val, function(threshold) {
+      sum(data[[dbh_col]] >= threshold & data[[dbh_col]] <= x_upper)
+    })
+    
+    # Get alpha value for the current plot
+    alpha_true <- unique(data[[alpha_col]])
+    
+    # Prepare data for Stan
+    stan_data <- list(
+      K = length(i_val),          # Number of groups (thresholds)
+      alpha = alpha_true,         # Shared alpha
+      x_min = x_min,              # Minimum DBH threshold
+      x_upper = x_upper,          # Maximum DBH threshold
+      i_val = i_val,              # Diameter thresholds for each group
+      N_obs = N_obs               # Observed counts for each group
+    )
+    
+    # Compile and fit the model with custom sampling parameters
+    fit <- tryCatch({
+      sampling(
+        stan_ntot_hierarch_compile, 
+        data = stan_data, 
+        warmup = warmup,
+        iter = iter, 
+        chains = chains, 
+        cores = cores, 
+        refresh = 0
+      )
+    }, error = function(e) {
+      message(paste("Error fitting model for plot:", deparse(substitute(data)), ":", e$message))
+      return(NULL)
+    })
+    
+    # Skip to the next plot if fitting failed
+    if (is.null(fit)) next
+    
+    # Extract and summarize results
+    N_tot_est <- summary(fit, pars = "Ntot")$summary[,"mean"]
+    
+    # Append results to the data frame
+    results <- rbind(
+      results,
+      data.frame(
+        N_tot_est = N_tot_est,
+        N_tot_true = data_all%>%nrow(),
+        alpha_true = alpha_true,             # Add the true alpha value to the result
+        stringsAsFactors = FALSE
+      )
+    )
+    
+    # Store the results for the current data frame in the list
+    all_results[[length(all_results) + 1]] <- results
+  }
+  
+  # Return the list of results for all data frames
+  return(all_results)
+}
+
+```
+
+
+```{r}
+forest_type = "Temperate mixed forests"
+simulatedforestlist <- list.files(output_dir, pattern = forest_type, full.names = TRUE)
+
+# Read the data files into a list of data frames
+data_list <- lapply(simulatedforestlist, fread)  # Replace with appropriate file reading function if needed
+
+# Run the function on the list of data frames
+results <- estimate_tree_abundance_list(
+  data_list = data_list, 
+  i_val = seq(10, 15, 5),
+  model_code = stan_ntot_hierarch_compile,
+  dbh_col = "DBH",       # Column name for DBH
+  alpha_col = "alpha",   # Column name for alpha
+  chains = 3,            # Custom chains
+  iter = 2000,          # Custom iterations
+  warmup = 500,         # Custom warmup
+  cores = 1              # Custom cores
+)
+
+
+results_data<-results%>%
+  rbindlist()
+
+ggplot(results_data, aes(N_tot_est,alpha_true))+geom_point()
+
+```
+### Incorporating an Informative Prior for N\(_\text{tot}\) Using TreeMap Data
+
+To improve our estimates of total tree abundance (N\(_\text{tot}\)) for each forest plot, we incorporate an informative prior derived from the **TreeMap 2016 TPA_LIVE** dataset. This dataset, developed by the U.S. Forest Service, provides an estimate of the number of live trees per acre (TPA) at a 30 x 30 meter resolution. 
+
+Since we already downloaded the **TreeMap 2016 TPA_LIVE** raster file, we avoid querying Google Earth Engine repeatedly. The raster file is loaded directly into R and processed using the following steps:  
+
+1. **Load the TPA_LIVE raster:** We load the raster file into R and ensure it is correctly georeferenced.  
+2. **Crop to the plot extent:** To focus on the area relevant to our forest plots, we crop the raster using the extent of each plot. This minimizes computational overhead while retaining the necessary data for analysis.  
+3. **Convert TPA to trees per 900 m²:** Since 1 acre equals 4046.86 m², we convert the TPA values to trees per 900 m² (the area of a single 30 x 30 m cell) using the formula:  
+   \[
+   \text{Trees per 900 m²} = \text{TPA} \times \frac{900}{4046.86}
+   \]
+   This conversion allows us to estimate the expected number of trees for each 30 x 30 m cell within the plot.  
+4. **Sum across cells:** For each plot, we sum the converted values across all cells to derive the total expected tree abundance. This total serves as the informative prior for N\(_\text{tot}\) in our modeling framework.
+
+By integrating this prior information, we enhance our ability to estimate total tree abundance for individual plots, leveraging high-resolution spatial data to inform our analyses.
+
+
+```{r}
+# Load required libraries
+library(terra)
+library(sf)
+library(dplyr)
+
+# File path to the TreeMap raster
+treemap_file <- "C:/Users/adam.local/Downloads/TreeMap2016_TPA_LIVE"
+
+# Load the TreeMap raster
+treemap <- rast(treemap_file)
+
+# Function to calculate total tree abundance for a given plot
+calculate_ntot_prior <- function(plot_shapefile, treemap_raster) {
+  
+  # Load the plot shapefile
+  plot <- st_read(plot_shapefile)
+  
+  # Ensure CRS compatibility between plot and raster
+  plot <- st_transform(plot, crs(treemap_raster))
+  
+  # Crop the raster to the plot extent
+  cropped_raster <- crop(treemap_raster, vect(plot))
+  
+  # Mask the raster to the exact plot shape
+  masked_raster <- mask(cropped_raster, vect(plot))
+  
+  # Convert TPA (trees per acre) to trees per 900 m²
+  trees_per_cell <- masked_raster * (900 / 4046.86)
+  
+  # Sum tree abundance across all cells
+  total_trees <- global(trees_per_cell, sum, na.rm = TRUE)
+  
+  # Return total tree abundance
+  total_trees$value
+}
+
+# Example usage: Calculate Ntot prior for a specific plot shapefile
+# Replace 'example_plot.shp' with the path to your plot shapefile
+plot_shapefile <- "path_to_your_plot_shapefile/example_plot.shp"
+ntot_prior <- calculate_ntot_prior(plot_shapefile, treemap)
+
+# Print result
+cat("Estimated Ntot Prior for Plot:", ntot_prior, "\n")
 
 ```

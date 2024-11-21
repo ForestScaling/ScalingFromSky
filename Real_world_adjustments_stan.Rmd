@@ -69,7 +69,8 @@ This new approach provided a more flexible and data-driven method of handling no
 ### Model Code ### NEEDS CHANGING SO THAT VARIANCE IS IMPACTED BY THE PRIOR! SEE PIPELINE
 
 ```{r}
-stan_prior<-"data {
+stan_prior <- "
+data {
     int<lower=0> N;                  // Number of observations
     real<lower=0> x_min;             // Minimum threshold for the distribution (e.g., 3)
     real<lower=0> trunc_point;       // Observed data starts at this truncation threshold (e.g., 20)
@@ -77,41 +78,36 @@ stan_prior<-"data {
     vector<lower=0, upper=1>[N] crown_scor; // Average crown score for each plot (between 0 and 1)
     vector<lower=0>[N] x;            // Observed data, limited to range [trunc_point, trunc_upper]
     real max_height;                 // Maximum height of trees in the plot
+    real<lower=0> sigma;             // Standard deviation for lognormal distribution (set via data block)
 }
 
 parameters {
-    real<lower=0, upper=5> alpha;    // Shape parameter for Pareto distribution
+    real<lower=0> alpha;             // Shape parameter for Pareto distribution
 }
 
 transformed parameters {
-    // Logistic sigmoid for adjusting prior based on crown score
-    real sigmoid_prior_weight;
-    real prior_mean;
-    
+    real mu;                         // Location parameter for lognormal distribution
+
     // Adjust prior mean based on max height
+    real prior_mean;
     prior_mean = 3.92 - 1.88 * log10(max_height + 1e-6); // Log10 relationship with max_height
-    
-    // Apply the sharp sigmoid function to modify the prior weight based on crown score
-    // Reversed weight: higher crown scores lead to less reliance on the prior
-    sigmoid_prior_weight = 1 / (1 + exp(25 * (mean(crown_scor) - 0.5))); // Increased scaling factor for stronger effect
-    
-    // Adjust prior weight more strongly when crown scores are low
+
+    // Calculate location parameter (mu) from the prior mean and chosen sigma
+    mu = log(prior_mean) - 0.5 * sigma^2; // This ensures the mean of the lognormal is equal to prior_mean
 }
 
 model {
-    // Apply the adjusted prior by modifying its log-likelihood with the prior weight
-    // Tighten the prior even further for stronger influence
-    target += sigmoid_prior_weight * lognormal_lpdf(alpha | prior_mean, 0.05); // Even smaller variance for stronger prior
-    
+    // Apply the lognormal prior for alpha with sigma from the data block
+    alpha ~ lognormal(mu, sigma); // Lognormal distribution with mu and fixed sigma from data
+
     // Calculate the truncated cumulative probability in the observed range
     real p_trunc = pareto_cdf(trunc_upper | x_min, alpha) - pareto_cdf(trunc_point | x_min, alpha);
     
-    // Likelihood: Adjusted for the double-truncated Pareto distribution
+    // Likelihood: Adjusted for the double-truncated Pareto distribution with varying influence of the data
     for (n in 1:N) {
         target += pareto_lpdf(x[n] | x_min, alpha) - log(p_trunc);
     }
 }
-
 "
 ```
 
@@ -142,35 +138,32 @@ The model’s estimate for the shape parameter (`alpha`) of the Pareto distribut
   \]
   This formula connects the maximum height of trees in the plot to the expected shape of the Pareto distribution. The relationship is logarithmic, which means that as the height increases, the prior belief about `alpha` changes gradually.
 
-### 3. **Adjusting the Prior Based on Crown Score**:
+### 3. **Adjusting the Influence of the Data Based on Crown Score**:
 
-To account for the quality of the data, the model adjusts the influence of the prior based on the **crown score** for each plot. Crown scores reflect the reliability of the data, with higher scores indicating more reliable data.
+To account for the quality of the data, the model adjusts the influence of the **observed data** based on the **crown score** for each plot. Crown scores reflect the reliability of the data, with higher scores indicating more reliable data.
 
-- **The sigmoid function** is applied to the crown scores to calculate a weight that adjusts how much the model relies on the prior versus the observed data:
+- **The sigmoid function** is applied to the crown scores to calculate a weight that adjusts how much the model relies on the observed data:
   \[
-  \text{sigmoid\_prior\_weight} = \frac{1}{1 + \exp(25 \times (\text{mean\_crown\_scor} - 0.5))}
+  \text{sigmoid\_data\_weight} = \frac{1}{1 + \exp(25 \times (\text{mean\_crown\_scor} - 0.5))}
   \]
   The sigmoid function transforms the crown score into a value between 0 and 1:
-  - For plots with **low crown scores** (i.e., poor-quality data), the weight will be **closer to 1**, meaning the model will give more importance to the prior (i.e., the model will trust prior knowledge more than the potentially unreliable data).
-  - For plots with **high crown scores** (i.e., good-quality data), the weight will be **closer to 0**, meaning the model will rely more on the observed data rather than the prior.
-  
-This **sharp sigmoid function** ensures that the influence of the prior is gradually adjusted based on the crown score, with extreme crown scores (near 0 or 1) leading to stronger influence of the prior or observed data, respectively.
+  - For plots with **low crown scores** (i.e., poor-quality data), the weight will be **closer to 1**, meaning the model will reduce the influence of the observed data on the posterior.
+  - For plots with **high crown scores** (i.e., good-quality data), the weight will be **closer to 0**, meaning the model will rely more heavily on the observed data when estimating the parameter `alpha`.
 
-### 4. **Prior Tightening**:
+This **sharp sigmoid function** ensures that the influence of the observed data is gradually adjusted based on the crown score. For extreme crown scores (near 0 or 1), the model will either give more weight to the prior (for poor data) or to the observed data (for reliable data). This approach balances the contributions of the prior and observed data to account for varying data quality across plots.
 
-The influence of the prior is further **tightened** using a **small variance** (0.05), which makes the prior more influential when it is applied. This prevents the prior from being too weak and ensures it can override noisy data when necessary.
 
-### 5. **Model Likelihood**:
+### 4. **Model Likelihood**:
 
 After adjusting the prior for `alpha`, the model uses the **truncated Pareto distribution** to model the observed data:
 - The **truncated cumulative distribution** is calculated to determine the probability that observed data falls within the truncation bounds (`trunc_point` and `trunc_upper`).
 - Then, the **likelihood** of the observed data (`x`) is computed using the **Pareto log-likelihood** (`pareto_lpdf`). This likelihood is adjusted by the cumulative probability in the observed range to account for truncation. The likelihood is the core of the model, and it is used to update the parameter estimates based on the observed data.
 
-### 6. **Final Objective**:
+### 5. **Final Objective**:
 
 The objective of the model is to find the value of `alpha` that maximizes the likelihood of the observed data, while also incorporating the prior belief about `alpha` and adjusting it based on the quality of the data (through the crown score). The resulting `alpha` reflects both the prior knowledge (based on the maximum tree height) and the quality of the data in each plot (influenced by the crown score).
 
-### 7. **Interpretation of Results**:
+### 6. **Interpretation of Results**:
 
 - When the crown score is **low**, the model will trust the prior more, leading to an estimate for `alpha` that is more influenced by prior knowledge about tree height.
 - When the crown score is **high**, the model will rely more on the observed data, and `alpha` will be estimated from the data rather than the prior.
