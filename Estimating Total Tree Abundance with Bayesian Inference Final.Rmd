@@ -1,0 +1,313 @@
+---
+title: "Estimating Total Tree Abundance with Bayesian Inference"
+output: html_document
+---
+
+## Introduction
+
+In forest ecology, estimating the **total number of trees** (\(N_{\text{tot}}\)) in a plot is crucial for understanding forest structure and dynamics. Here, we aim to use observed tree size data (specifically, DBH—diameter at breast height) to estimate \(N_{\text{tot}}\) using a **Bayesian approach**. This method allows us to incorporate prior knowledge of \(N_{\text{tot}}\) and the **shape parameter** (\(\alpha\)) of the tree size distribution (assumed to follow a **Pareto distribution**) into the estimation process. The observed data we work with include the number of trees (\(N_{\text{obs}}\)) within a specific size range, bounded by a **cutoff diameter** (\(x_{\text{cutoff}}\)) and the **maximum diameter** (\(x_{\text{max}}\)).
+
+By using Bayesian inference, we can update our prior beliefs about \(N_{\text{tot}}\) based on the observed data, providing a posterior distribution that better reflects the underlying tree distribution.
+
+## Approach
+
+### 1. **Prior Knowledge (Priors)**
+
+#### Why: Setting informative priors
+
+In Bayesian statistics, we start with **prior knowledge** about the parameters we want to estimate. This prior knowledge is essential because it influences how we update our beliefs based on the observed data. Without a prior, we would have no initial belief about the total tree abundance or the shape of the tree size distribution, which would limit the effectiveness of the Bayesian framework.
+
+- **Prior for \(N_{\text{tot}}\)**: The total number of trees in the plot is modeled as a **normal distribution** with a specified mean (e.g., 1000 trees) and standard deviation (e.g., 200 trees). This prior reflects our initial uncertainty about the total number of trees before incorporating the observed data. The choice of 1000 as a prior mean might come from general knowledge about forest density in similar environments, and the standard deviation reflects uncertainty about the exact number of trees.
+
+- **Prior for \(\alpha\)**: The shape parameter \(\alpha\) of the Pareto distribution governs how tree sizes are distributed. For example, \(\alpha = 2\) would indicate a steep decline in the number of trees as DBH increases. Based on prior field data or theoretical expectations, we assume that \(\alpha\) follows a **normal distribution** with a mean and standard deviation that reflect observed or expected values for similar forest plots. This prior allows us to incorporate knowledge about how tree sizes tend to be distributed, helping guide the model.
+
+### 2. **The Pareto Distribution**
+
+#### Why: Choosing the Pareto distribution
+
+The **Pareto distribution** is commonly used to model distributions where a few large values dominate the majority of the data. In the case of trees, most of the trees are small, but a small number of large trees make up a significant proportion of the biomass and canopy cover. The Pareto distribution is well-suited for this because its heavy tail reflects the dominance of large trees in the ecosystem.
+
+The **Pareto probability density function (PDF)** for tree size \(x\) is:
+
+\[
+f(x; \alpha) = \frac{\alpha x_{\text{min}}^\alpha}{x^{\alpha + 1}} \quad \text{for} \quad x \geq x_{\text{min}}
+\]
+
+Where:
+- \(x_{\text{min}}\) is the minimum DBH threshold (e.g., 3 cm) under which we do not consider trees in the distribution.
+- \(\alpha\) controls the steepness of the decline in tree sizes.
+
+Using this distribution, we can model the tree size distribution across the plot. The **cumulative distribution function (CDF)** of the Pareto distribution gives us the proportion of trees expected to be smaller than a particular size \(x\). We will use this function to estimate the expected number of trees within a given size range.
+
+### 3. **Observed Data and Likelihood**
+
+#### Why: Modeling the likelihood of observing the data
+
+The observed data consist of the number of trees (\(N_{\text{obs}}\)) that fall between a **cutoff diameter** (\(x_{\text{cutoff}}\)) and a **maximum diameter** (\(x_{\text{max}}\)). The goal is to estimate \(N_{\text{tot}}\), the total number of trees in the plot, based on this observed data.
+
+To compute the expected number of trees within the size range from \(x_{\text{cutoff}}\) to \(x_{\text{max}}\), we first calculate the proportion of the total tree distribution that falls within this size range using the **CDF**:
+
+\[
+P_{\text{obs}} = F(x_{\text{max}}; \alpha) - F(x_{\text{cutoff}}; \alpha)
+\]
+
+This gives us the proportion of the total tree abundance expected to fall within the size range \(x_{\text{cutoff}}\) to \(x_{\text{max}}\). By multiplying this proportion by \(N_{\text{tot}}\), we obtain the **expected number of trees** in this size range:
+
+\[
+\text{Expected number of trees} = N_{\text{tot}} \times P_{\text{obs}}
+\]
+
+We then model the observed count \(N_{\text{obs}}\) as a **Poisson-distributed random variable** because the number of trees in the observed size range is a discrete count. The mean of this distribution is the expected number of trees in the range, and we use this to compare the observed and expected counts.
+### Why model \(N_{\text{obs}}\) as a random variable?
+
+In any real-world observation, the data we collect will naturally vary from one sampling to another due to inherent randomness in the system (e.g., variations in tree growth, environmental factors, or measurement error). Even though we have an **expected number of trees** in a given size range (calculated from the Pareto distribution), the actual count observed in any single plot or sample will be a **random outcome** from a distribution of possible outcomes.
+
+Modeling \(N_{\text{obs}}\) as a **random variable** reflects this natural variability. By doing so, we allow our model to account for the uncertainty in the observed count and **quantify this variability**, which is crucial for making accurate inferences about \(N_{\text{tot}}\), the total tree abundance.
+
+### Why specifically Poisson?
+
+The **Poisson distribution** is well-suited for modeling the number of events (in this case, trees) occurring in a fixed region (the plot) over a given period or within a defined range of sizes. There are several key reasons why the Poisson distribution works particularly well for this type of data:
+
+1. **Discrete nature of the count**: Tree counts are discrete — you can only count whole trees, and there cannot be fractional or negative values. The Poisson distribution models discrete counts of events (trees) occurring in a fixed space, making it a natural choice for this problem.
+
+2. **Events are rare and independent**: The Poisson distribution assumes that the events (tree occurrences) are rare and occur independently of one another. While this assumption might not be perfectly true (e.g., larger trees are more likely to occur near other large trees), it is generally a good approximation for tree distributions in forests, especially when we consider large plots.
+
+3. **Rate parameter \(\lambda\)**: The Poisson distribution is characterized by a **rate parameter** \(\lambda\), which represents the expected number of events (trees) in a given interval. In our case, the rate parameter is equivalent to the **expected number of trees** in the observed size range, which is calculated as the product of the total number of trees \(N_{\text{tot}}\) and the proportion of trees expected to fall within that size range. This matches the expected number of trees in the range, making the Poisson distribution a good fit for modeling \(N_{\text{obs}}\).
+
+Thus, modeling the observed count with a Poisson distribution allows us to appropriately account for the random variability in tree counts while using the expected number of trees (derived from the Pareto model) to guide our likelihood function. This enables us to use Bayesian inference to update our estimate of \(N_{\text{tot}}\) while accounting for the inherent randomness and uncertainty in the data.
+
+### 4. **Bayesian Inference**
+
+#### Why: Updating beliefs with Bayesian inference
+
+Bayesian inference allows us to combine our prior beliefs about the parameters (the total tree abundance \(N_{\text{tot}}\) and the shape parameter \(\alpha\)) with the likelihood of observing the data. This combination results in a **posterior distribution** that reflects both the prior information and the observed data.
+
+The posterior distribution is obtained by multiplying the **prior** by the **likelihood** and normalizing. The Bayesian framework ensures that the resulting posterior distribution is a coherent update of our initial beliefs about \(N_{\text{tot}}\) and \(\alpha\) given the observed data. This process is central to Bayesian analysis because it allows us to quantify uncertainty about the model parameters.
+
+We use **Markov Chain Monte Carlo (MCMC)** methods to sample from the posterior distribution. This enables us to estimate the total number of trees (\(N_{\text{tot}}\)) and the shape parameter (\(\alpha\)) by drawing samples from the posterior distribution, which reflect our updated knowledge.
+
+### 5. **Calculating the Cutoff Diameter (\(x_{\text{cutoff}}\)) with Segmentation**
+
+#### Why: Determining the cutoff diameter from segmentation
+
+The **cutoff diameter** \(x_{\text{cutoff}}\) is the key threshold that separates the small, understory trees from the larger trees that dominate the canopy. In this analysis, we use **crown segmentation** to calculate this cutoff. Crown segmentation helps us identify the point at which tree crowns start to significantly overlap with each other, making smaller trees hidden by the larger trees in the canopy.
+
+This segmentation is based on the idea that smaller trees are harder to detect from remote sensing because they are overshadowed by larger trees. The cutoff diameter \(x_{\text{cutoff}}\) is chosen as the diameter at which trees start to become increasingly invisible from above due to the overlap of tree crowns. This is important for ensuring that the observed data used in the model accurately reflect the visible portion of the tree population.
+
+To determine \(x_{\text{cutoff}}\), we calculate the size at which trees in the understory become less likely to be observed due to canopy cover. This calculation can be based on crown segmentation models or visual inspection of size distributions, and it provides a more robust estimate of the number of trees in the plot by focusing on those that are visible from remote sensing.
+
+---
+
+## Conclusion
+
+In this analysis, we used a **Bayesian approach** to estimate the total number of trees (\(N_{\text{tot}}\)) in a forest plot based on tree size data. By modeling tree sizes with a **Pareto distribution** and incorporating observed data using a **Poisson likelihood**, we were able to estimate both the total number of trees and the shape of the tree size distribution.
+
+We also carefully calculated the **cutoff diameter** \(x_{\text{cutoff}}\) using crown segmentation, which allowed us to focus on the trees visible from remote sensing. This step ensures that we accurately estimate \(N_{\text{tot}}\) by considering only those trees that are observable from above.
+
+The Bayesian framework provides a powerful way to combine prior knowledge with observed data, leading to a more accurate estimate of total tree abundance and a better understanding of forest structure.
+
+---
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(segmented)
+
+# Function to calculate the breakpoint for a single plot
+calculate_breakpoint <- function(plot_data) {
+  # Filter DBH values to be within the range of interest (<= 50)
+  observed_dbhs <- plot_data$dbh
+  observed_dbhs <- observed_dbhs[observed_dbhs <= 50]
+  
+  if (length(observed_dbhs) < 10) {
+    return(NA)  # Return NA if there aren't enough data points
+  }
+  
+  # Kernel Density Estimation for DBH data
+  kde <- density(observed_dbhs, bw = "nrd0")  # Adjust bandwidth as needed
+  
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= 50],
+    y = kde$y[kde$x <= 50]
+  )
+  
+  # Total observed data (number of trees)
+  total_trees <- length(observed_dbhs)
+  
+  # Estimated abundances by multiplying the densities by the total number of trees
+  estimated_abundance <- kde$y * total_trees
+  
+  # Apply log10 transformation to both DBH and abundance
+  log_x <- log10(kde$x)  # Log10 of DBH values
+  log_y <- log10(estimated_abundance)  # Log10 of abundance values
+  
+  # Create a data frame with log-transformed values
+  df <- data.frame(x = log_x, y = log_y)
+  
+  # Fit a simple linear regression model to the log-transformed data
+  fit <- lm(y ~ x, data = df)
+  
+  # Fit a piecewise regression model to the linear model
+  # Initial guess for breakpoint at x=log10(25)
+  segmented.fit <- segmented(fit, seg.Z = ~x, psi = log10(25))
+  
+  # Extract breakpoint in log10 space
+  breakpoint_log10 <- segmented.fit$psi[, 2]
+  
+  # Back-transform to original scale (DBH)
+  breakpoint <- 10^breakpoint_log10
+  
+  return(breakpoint)
+}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Filter data and calculate breakpoints
+breakpoints_with_data <- stantest %>%
+  filter(dbh <= 50) %>%  # Exclude DBH values greater than 50
+  group_by(plot_id) %>%
+  summarise(
+    breakpoint = calculate_breakpoint(cur_data()),
+    .groups = "drop"
+  )
+
+# Merge breakpoints with the original data for plotting
+stantest_with_breakpoints <- stantest %>%
+  filter(dbh <= 50) %>%  # Exclude DBH values greater than 50
+  inner_join(breakpoints_with_data, by = "plot_id")
+
+# Create histogram plots with log-transformed axes
+ggplot(stantest_with_breakpoints, aes(x = dbh)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  geom_vline(aes(xintercept = breakpoint), color = "red", linetype = "dashed") +
+  scale_x_log10() +
+  scale_y_log10() +
+  facet_wrap(~plot_id, scales = "free") +
+  theme_minimal() +
+  labs(
+    title = "Histograms of DBH by Plot with Breakpoints",
+    x = "DBH (log scale)",
+    y = "Count (log scale)"
+  )
+
+
+```
+
+
+```{r}
+library(dplyr)
+library(rstan)
+
+# Extract required values from selected_plot_data
+alpha_mean <- selected_plot_data$alpha_mean %>% mean()
+alpha_sd <- selected_plot_data$se %>% mean()
+alpha_upper <- selected_plot_data$CIhigh %>% mean()
+alpha_lower <- selected_plot_data$CIlow %>% mean()
+
+# Breakpoint
+breakpoint <- breakpoints_with_data %>%
+  filter(plot_id == "plot_20") %>%
+  pull(breakpoint)
+
+# Observed number of trees between breakpoint and 50
+N_observed <- nrow(selected_plot_data %>% filter(dbh >= breakpoint, dbh <= 50))
+
+# Prior for N_tot
+N_prior_mean <- 1000
+N_prior_sd <- 200
+
+# Define the Stan data list
+stan_data <- list(
+  N_obs = N_observed,       # Observed count of trees
+  xmin = 3,                 # Minimum DBH
+  xcutoff = breakpoint,     # Breakpoint (x_cutoff)
+  xmax = 50,                # Maximum DBH
+  alpha_prior_mean = alpha_mean,
+  alpha_prior_sd = alpha_sd,
+  N_prior_mean = N_prior_mean,
+  N_prior_sd = N_prior_sd
+)
+# Define updated Stan model code
+stan_model_code_poisson <- "
+data {
+  int<lower=0> N_obs;             // Observed tree count
+  real<lower=3> xmin;             // Minimum DBH (3 cm)
+  real<lower=xmin> xcutoff;       // Breakpoint (cutoff)
+  real<lower=xcutoff> xmax;       // Maximum DBH (50 cm)
+  real<lower=0> alpha_prior_mean; // Prior mean for alpha
+  real<lower=0> alpha_prior_sd;   // Prior SD for alpha
+  real<lower=0> N_prior_mean;     // Prior mean for N_tot
+  real<lower=0> N_prior_sd;       // Prior SD for N_tot
+}
+parameters {
+  real<lower=0> N_tot;            // Total abundance (continuous)
+  real<lower=0> alpha;            // Slope of the Pareto distribution
+}
+model {
+  // Priors
+  alpha ~ normal(alpha_prior_mean, alpha_prior_sd); // Prior for alpha
+  N_tot ~ normal(N_prior_mean, N_prior_sd);         // Prior for N_tot
+
+  // Likelihood for observed trees
+  real P_obs = (pow(xcutoff, 1 - alpha) - pow(xmax, 1 - alpha)) /
+               (pow(xmin, 1 - alpha) - pow(xmax, 1 - alpha)); // Fraction observed
+  N_obs ~ poisson(N_tot * P_obs); // Likelihood using Poisson
+}
+generated quantities {
+  real N_unobs = N_tot * (1 - (pow(xcutoff, 1 - alpha) - pow(xmax, 1 - alpha)) /
+                                (pow(xmin, 1 - alpha) - pow(xmax, 1 - alpha))); // Unobserved count
+  real P_obs = (pow(xcutoff, 1 - alpha) - pow(xmax, 1 - alpha)) /
+               (pow(xmin, 1 - alpha) - pow(xmax, 1 - alpha)); // Proportion observed
+}
+"
+
+# Prepare the data for Stan
+stan_data <- list(
+  N_obs = nrow(selected_plot_data),
+  xmin = 3,
+  xcutoff = breakpoints_with_data %>% filter(plot_id == "plot_20") %>% pull(breakpoint),
+  xmax = 50,
+  alpha_prior_mean = selected_plot_data$alpha_mean %>% mean(),
+  alpha_prior_sd = selected_plot_data$se %>% mean(),
+  N_prior_mean = 500, # Prior mean for total abundance
+  N_prior_sd = 200     # Prior SD for total abundance
+)
+
+# Fit the updated model using Stan
+fit <- stan(
+  model_code = stan_model_code_poisson,
+  data = stan_data,
+  iter = 2000,     # Number of iterations
+  chains = 4,      # Number of chains
+  seed = 123       # Seed for reproducibility
+)
+
+# Summarize the results
+print(summary(fit))
+
+# Extract posterior distributions and visualize
+posterior <- extract(fit)
+hist(posterior$N_tot, main = "Posterior of N_tot", xlab = "N_tot", col = "skyblue", breaks = 30)
+hist(posterior$alpha, main = "Posterior of Alpha", xlab = "Alpha", col = "pink", breaks = 30)
+
+library(ggplot2)
+
+# Posterior for N_tot
+posterior_df <- data.frame(N_tot = N_tot_posterior)
+ggplot(posterior_df, aes(x = N_tot)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  labs(title = "Posterior Distribution of Total Abundance (N_tot)",
+       x = "N_tot", y = "Density") +
+  theme_minimal()
+
+# Posterior for alpha
+posterior_alpha <- data.frame(alpha = alpha_posterior)
+ggplot(posterior_alpha, aes(x = alpha)) +
+  geom_density(fill = "green", alpha = 0.5) +
+  labs(title = "Posterior Distribution of Alpha",
+       x = "Alpha", y = "Density") +
+  theme_minimal()
+
+```

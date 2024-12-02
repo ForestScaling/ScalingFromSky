@@ -1,0 +1,355 @@
+---
+title: "Testing Bayesian Method on NEON Vegetation Structure Data"
+author: "Adam Eichenwald"
+output: html_document
+---
+
+## Introduction
+
+In this document, we aim to test a Bayesian method for estimating tree abundance using NEON vegetation structure data. The NEON dataset provides detailed measurements of tree stem diameters (DBH) and includes information about the sampling design. A key challenge in working with this dataset is the use of nested subplots to measure trees with DBH <10 cm. These nested subplots may or may not be used on a plot-by-plot basis, depending on the density of smaller trees and other local factors.
+
+This variation introduces complexity because plots with nested subplots measure smaller trees over different areas, while trees with DBH ≥10 cm are typically measured across the full plot area. To avoid potential biases and simplify the analysis, we will focus exclusively on plots where nested subplots were *not* used, ensuring that all trees, regardless of size, were measured within the full plot area.
+
+The goal of this document is to:
+1. Filter the NEON dataset to retain only plots where nested subplots were not used.
+2. Use the filtered dataset to test a Bayesian approach for estimating total tree abundance (`N_tot`) and other parameters.
+3. Develop a workflow that can be applied to NEON data and adapted for future use.
+
+## Geolocation of Subplots
+
+The NEON dataset includes tree-level measurements taken across multiple subplots within a site. To incorporate spatial information into the analysis, we use the `geoNEON` package, which provides functions for extracting geographic coordinates associated with NEON observations. Specifically, the function `getLocTOS()` is used to assign geolocation data to the tree records in the dataset.
+
+
+```{r}
+# Load the geoNEON package
+library(geoNEON)
+# Step 1: Download and load NEON vegetation structure data
+# vst <- loadByProduct(dpID = "DP1.10098.001", check.size = FALSE)
+
+# Save the data for future use
+# save(vst, file = "stackedNEONtables.Rdata")
+load("stackedNEONtables.Rdata")
+# Step: Retrieve geolocation data for each subplot (commented out because it takes a bit to run)
+# vst.loc <- getLocTOS(data = vst$vst_apparentindividual,
+#                      dataProd = "vst_apparentindividual")
+# fwrite(vst.loc, "vst.loc.csv")
+
+vst.loc<-fread("vst.loc.csv")
+
+```
+
+## Data Preparation
+
+The NEON vegetation structure dataset is extensive and includes tree measurements across multiple sites and time periods. To ensure a clean dataset for analysis, we take the following steps:
+
+1. **Filtering to Recent Measurements**: Trees are measured multiple times over the years. To avoid duplicates and ensure consistency, we retain only the most recent measurement for each tree.
+2. **Removing Multibole Trees**: Some trees in the dataset have multiple boles or stems, which are measured and recorded separately under different `individualID`s. For simplicity, we remove these multibole entries to ensure each tree is represented once in the analysis.
+
+
+```{r}
+# Load necessary libraries
+library(neonUtilities)
+library(dplyr)
+library(stringr)
+
+# Step 2: Define a function to remove multibole entries
+remove_multibole <- function(df) {
+  # Extract the last section and siteID from individualID
+  id_split <- str_split_fixed(df$individualID, "\\.", 5)
+  last_id_section <- id_split[, 5]
+  siteID <- id_split[, 4]
+  
+  # Identify whether the last section is a bole (contains letters)
+  last_digits <- gsub("[^0-9]", "", last_id_section)
+  is_bole <- last_id_section != last_digits
+  
+  # Combine relevant columns into a lookup table
+  id_lut <- df %>%
+    mutate(
+      last_digits = last_digits,
+      last_id_section = last_id_section,
+      siteID = siteID,
+      is_bole = is_bole
+    )
+  
+  # Identify IDs with multiple entries
+  multiple_ids <- id_lut %>%
+    dplyr::count(last_digits, siteID) %>%
+    filter(n > 1) %>%
+    select(last_digits, siteID)
+  
+  # Filter out multibole entries
+  remove_ids <- id_lut %>%
+    inner_join(multiple_ids, by = c("last_digits", "siteID")) %>%
+    filter(is_bole) %>%
+    pull(individualID)
+  
+  # Return dataframe without multibole entries
+  df %>%
+    filter(!individualID %in% remove_ids)
+}
+
+# Step 3: Remove multibole entries and retain the most recent measurements
+multiboleremoved <- vst.loc %>%
+  group_by(individualID) %>%
+  slice(which.max(as.Date(date))) %>%
+  ungroup() %>%
+  remove_multibole()
+
+```
+
+### Filtering Subplots with Complete Tree Data
+
+The NEON vegetation structure dataset uses a flexible sampling design, where subplots vary in how trees are measured. In some cases, all trees are measured regardless of size, while in others, only trees with a stem diameter (DBH) ≥10 cm are recorded, or nested subplots are used to sample smaller trees (<10 cm). This variation can complicate analysis, as the measured area for smaller trees may differ from the area used to measure larger trees.
+
+To ensure consistency in our analysis, we focus exclusively on subplots where all trees, both smaller (<10 cm) and larger (≥10 cm), are measured in the same plot. This eliminates potential biases introduced by nested subplots or incomplete measurements.
+
+We approach this by evaluating each subplot individually. For each `subplotID`, we check whether:
+
+1. The subplot includes at least one tree with a `stemDiameter` ≥10 cm.
+2. The subplot includes at least one tree with a `stemDiameter` <10 cm.
+3. Both conditions are true, which flags the subplot as having "complete data."
+
+Only subplots meeting both conditions are retained in the final dataset. This ensures that the dataset is consistent in terms of measurement area, enabling reliable comparisons across tree size classes. Subplots where only large trees are measured or where nested subplots are used to measure smaller trees are excluded.
+
+This filtering step is critical for ensuring that our analysis is robust and unbiased, providing a strong foundation for subsequent exploration and modeling.
+
+```{r}
+# Step: Flag subplots that include all trees
+filtered_data <- multiboleremoved %>%
+  drop_na(stemDiameter)%>%
+  group_by(subplotID, plotID) %>%
+  dplyr::summarise(
+    has_large_trees = any(stemDiameter >= 10, na.rm = TRUE),
+    has_small_trees = any(stemDiameter < 10, na.rm = TRUE),
+    include_all_data = has_large_trees & has_small_trees
+  ) %>%
+  filter(include_all_data)
+
+# Step: Filter the original dataset to keep only those subplots
+final_data <- multiboleremoved %>%
+  drop_na(stemDiameter)%>%
+  semi_join(filtered_data)%>%
+  drop_na(adjDecimalLatitude)
+
+```
+
+```{r}
+library(sf)
+
+shp_list <- list() # Initialize an empty list to store geometries
+
+for (i in unique(distinct_data$utmZone)) {
+  temp_data <- distinct_data %>%
+    filter(utmZone == i) %>%
+    mutate(
+      xmin = adjEasting - plot_side_length / 2,
+      xmax = adjEasting + plot_side_length / 2,
+      ymin = adjNorthing - plot_side_length / 2,
+      ymax = adjNorthing + plot_side_length / 2
+    ) %>%
+    drop_na(xmin, xmax, ymin, ymax)
+
+  # Create polygons for each row
+  polygons <- lapply(1:nrow(temp_data), function(j) {
+    st_polygon(list(
+      cbind(
+        c(temp_data$xmin[j], temp_data$xmax[j], temp_data$xmax[j], temp_data$xmin[j], temp_data$xmin[j]),
+        c(temp_data$ymin[j], temp_data$ymin[j], temp_data$ymax[j], temp_data$ymax[j], temp_data$ymin[j])
+      )
+    ))
+  })
+
+  # Combine polygons into an sf object with dynamic CRS
+  shp_zone_sf <- st_sf(temp_data,
+    geometry = st_sfc(polygons, crs = paste0("+proj=utm +zone=", parse_number(i), " +datum=WGS84 +units=m +no_defs +type=crs")),
+    agr = "constant"
+  )
+
+ # Transform to WGS84 (EPSG:4326)
+  shp_zone_sf <- st_transform(shp_zone_sf, crs = 4326)
+  
+  # Add to the list of sf objects
+  shp_list[[i]] <- shp_zone_sf
+}
+
+# Combine all sf objects into one if needed
+shp_combined <- do.call(rbind, shp_list)
+
+shp_combined%>%
+  select(plotID, subplotID)%>%
+  head(5)
+
+```
+### Setting Up the Prior for Total Tree Abundance (Ntot) Using TreeMap Data
+
+In this section, we calculate a prior for the total tree abundance (`Ntot`) for each plot using the TreeMap dataset. This prior is derived by comparing the total tree density from the TreeMap data with the available plot data, specifically the plot geometries that we previously prepared as shapefiles. TreeMap provides tree density estimates in terms of trees per acre (TPA), and we will convert this to trees per square meter for consistency with the plot geometry.
+
+The approach involves the following steps:
+
+1. **Loading the TreeMap Dataset**:  
+   The TreeMap dataset provides tree density data on a per-acre basis. We begin by loading this dataset into R as a raster file, which will then be spatially overlaid with the plot polygons.
+
+2. **Preparing Plot Data**:  
+   The plot geometries are grouped by `siteID`. Using the `st_union()` function, we merge any smaller plot polygons within each site, ensuring that we compute tree abundance over the entire site area. This aggregation helps us to understand the spatial distribution of trees across different sites.
+
+3. **Buffering the Plot Polygons**:  
+   A small buffer is applied to the plot polygons to ensure that all plot areas, including those near the edges of the raster grid, are adequately covered. This step is important if some plot polygons do not fully overlap with the raster grid cells.
+
+4. **Calculating Area and Extracting Tree Density**:  
+   The area of each plot is calculated in square meters, and we use the `exactextractr` package to extract the average tree density (TPA) from the TreeMap raster for each plot area. The density is then converted from trees per acre to trees per square meter to ensure consistency with the spatial units used in the plot shapefile.
+
+5. **Estimating Total Tree Abundance**:  
+   By multiplying the tree density (in trees per square meter) by the plot area, we estimate the total number of trees in each plot. This results in an estimate of total tree abundance (`Ntot`) for each site.
+
+The prior for `Ntot` is thus based on these estimates of total tree abundance derived from the TreeMap raster, providing a spatially informed prior that reflects real-world tree densities across the study area. The following code chunk demonstrates how these calculations are performed using the plot polygons and TreeMap raster to compute the total tree abundance for each site.
+
+
+
+```{r}
+library(sf)
+library(exactextractr)
+library(raster)
+
+# Define a function to calculate Ntot for each site from the shapefile and raster
+process_shapefile_grouped <- function(plot_polygons, treemap_raster, buffer_size = 10) {
+  # Ensure CRS matches between raster and polygons
+  if (!st_crs(plot_polygons) == st_crs(treemap_raster)) {
+    plot_polygons <- st_transform(plot_polygons, st_crs(treemap_raster))
+  }
+  
+  # Group by siteID (assuming 'siteID' is in the attributes)
+  grouped_results <- plot_polygons %>%
+    group_by(plotID, subplotID, plot_size_m2) %>%
+    summarize(geometry = st_union(geometry), .groups = "drop") %>%
+    st_sf()
+  
+  # Apply buffer to polygons (to handle cases where polygons don't overlap with the raster)
+  # grouped_results <- grouped_results %>%
+  #   mutate(geometry = st_buffer(geometry, dist = buffer_size)) # Buffer size in CRS units
+  # 
+  # Calculate area and extract raster values
+  grouped_results <- grouped_results %>%
+    mutate(
+      # area_m2 = st_area(.) %>% as.numeric(),
+      tpa_mean = exactextractr::exact_extract(treemap_raster, geometry, fun = "mean"),
+      trees_per_m2 = tpa_mean / 4046.856, # Convert trees per acre to trees per m²
+      trees_in_polygon = trees_per_m2 * plot_size_m2
+    )
+  
+  # Summarize results for each siteID
+  ntot_per_site <- grouped_results %>%
+    st_drop_geometry() %>%
+    group_by(plotID, subplotID) %>%
+    summarize(Ntot = sum(trees_in_polygon, na.rm = TRUE), .groups = "drop")
+  
+  return(ntot_per_site)
+}
+
+# Load the TreeMap raster
+treemap_path <- "C:\\Users\\adam.local\\Downloads\\TreeMap2016_TPA_LIVE\\TreeMap2016_TPA_LIVE.tif"
+treemap_raster <- raster(treemap_path)
+
+# Calculate Ntot using the new shapefile
+results <- process_shapefile_grouped(shp_combined, treemap_raster)%>%
+  filter(Ntot != 0)
+
+# Print the results
+print(results)
+
+
+```
+## Estimating the Alpha Parameter from Field Data
+
+In this section, we estimate the Pareto density parameter (`alpha`) directly from field data for trees with a DBH between 3 and 50 cm. This estimate will serve as a baseline for evaluating how well `alpha` can be recovered from remote sensing data in future analyses.
+
+We follow these steps:
+
+1. **Joining Data**: We begin by merging the `results` (total tree abundance estimates) with the `final_data` dataset. This merge is restricted to trees with a DBH between 3 and 50 cm, allowing us to calculate the total number of trees (`Ntot_true`) per plot and subplot. This step ensures that we are working with relevant data for the estimation of `alpha`.
+
+2. **Summarizing Total Trees**: Next, we aggregate the tree counts by `plotID`, summing both the estimated (`Ntot`) and true (`Ntot_true`) total tree counts. A filter is applied to retain only those plots where the true total number of trees (`Ntot_true`) is at least 25, ensuring a reliable estimate for `alpha`.
+
+3. **Preparing Data for Stan**: After filtering, we join the summarized total tree counts with the `final_data` entries for each `plotID`, focusing on trees with DBHs between 3 and 50 cm. This step prepares the dataset for model fitting.
+
+4. **Fitting the Stan Model**: For each `plotID`, we fit the Stan model to estimate the `alpha` parameter. The model assumes a Pareto distribution for the tree DBH values, with a lognormal prior for `alpha`. The Stan model is fitted using the `stemDiameter` values from the `dataprep` data frame for each plot.
+
+5. **Extracting Results**: After fitting the model, the posterior mean and standard deviation for `alpha` are extracted for each plot. These results will be used as a baseline to test how accurately `alpha` can be estimated from remote sensing data.
+
+This process is important because it establishes a true `alpha` estimate from the field data, which will later allow us to compare the recovery of `alpha` from remote sensing data. The following code demonstrates how these steps are implemented:
+
+```{r}
+# Step 1: Calculate total trees by joining results and final_data for trees with DBH between 3 and 50
+total_trees <- inner_join(results, final_data %>%
+                            filter(stemDiameter >= 3 & stemDiameter <= 50) %>%
+                            group_by(plotID, subplotID) %>%
+                            summarize(Ntot_true = n()) %>%
+                            ungroup())
+
+# Step 2: Summarize the total trees for each plotID
+total_trees <- total_trees %>%
+  group_by(plotID) %>%
+  summarize(Ntot_true = sum(Ntot_true),
+            Ntot_est = sum(Ntot)) %>%
+  filter(Ntot_true >= 25)  # Filtering for plotIDs with true Ntot >= 25
+
+# Step 3: Prepare the data by joining with final_data
+dataprep <- total_trees %>%
+  inner_join(final_data %>%
+               filter(stemDiameter >= 3 & stemDiameter <= 50))
+
+stan_model_code_alpha <- "
+data {
+  int<lower=0> N;               // Number of observations
+  real<lower=0> x_min;          // Minimum DBH
+  vector<lower=0>[N] x;         // DBH values
+}
+parameters {
+  real<lower=0, upper=5> alpha; // Pareto density parameter
+}
+model {
+  alpha ~ lognormal(1, 1);      // Prior for alpha
+  x ~ pareto(x_min, alpha);     // Likelihood for Pareto distribution
+}
+"
+stan_model_alpha<-stan_model(model_code =stan_model_code_alpha)
+# Step 4: Define a function to fit the Stan model for each plotID
+fit_alpha_for_plot <- function(plot_data) {
+  # Prepare Stan data for the given plot
+  stan_data <- list(
+    N = nrow(plot_data),
+    x_min = min(plot_data$stemDiameter),  # Minimum DBH for the Pareto distribution
+    x = plot_data$stemDiameter  # DBH values
+  )
+  
+  # Fit the Stan model
+  fit <- sampling(
+    stan_model_alpha,
+    data = stan_data,
+    iter = 2000,
+    chains = 4,
+    refresh = 0
+  )
+  
+  # Extract posterior mean and standard deviation for alpha
+  alpha_est <- summary(fit)$summary["alpha", "mean"]
+  alpha_sd <- summary(fit)$summary["alpha", "sd"]
+  
+  return(list(alpha = alpha_est, alpha_sd = alpha_sd))
+}
+
+# Step 5: Fit the model for each plotID and extract alpha estimates
+alpha_results <- dataprep %>%
+  group_by(plotID) %>%
+  nest() %>%
+  mutate(
+    fit_results = map(data, fit_alpha_for_plot),
+    alpha = map_dbl(fit_results, ~ .x$alpha),
+    alpha_sd = map_dbl(fit_results, ~ .x$alpha_sd)
+  ) %>%
+  select(plotID, alpha, alpha_sd)
+
+# View the alpha results for each plotID
+print(alpha_results)
+
+
+```
