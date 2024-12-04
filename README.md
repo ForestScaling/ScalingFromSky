@@ -23,6 +23,10 @@ _Real_world_adjustments_stan.Rmd_: Script that adjusts the model created in STAN
 
 **Fig. 2.** _Comparison of estimated alpha values for simulated mixed forest data (based on "remote sensing data", derived from code that determines which trees are visible from above) against the true alpha values for the forest._
 
+_Testing Bayesian Method on NEON Vegetation Structure Data (Tree Abundance)_: Script that tests a Bayesian method for estimating tree abundance using NEON vegetation structure data. The NEON dataset provides detailed measurements of tree stem diameters (DBH) and includes information about the sampling design. A key challenge in working with this dataset is the use of nested subplots to measure trees with DBH <10 cm. These nested subplots may or may not be used on a plot-by-plot basis, depending on the density of smaller trees and other local factors. This variation introduces complexity because plots with nested subplots measure smaller trees over different areas, while trees with DBH ≥10 cm are typically measured across the full plot area. To avoid potential biases and simplify the analysis, we will focus exclusively on plots where nested subplots were *not* used, ensuring that all trees, regardless of size, were measured within the full plot area. This script filters the NEON dataset to retain only plots where nested subplots were not used, sets up a prior for tree abundance in each location using the TreeMap dataset (published online), and then tests a Bayesian approach for estimating total tree abundance (`N_tot`).
+
+![image](https://github.com/user-attachments/assets/0a703426-77cf-4fd8-b80c-07c4221e7401)
+**Fig. 3.** _A  plot of the TreeMap dataset, cropped to just the extent of the Harvard Forest NEON site. The raster is displaying estimates of trees per acre on a 30x30m scale. In our scripts, we convert this estimate to trees per m<sup>2</sup> and then multiply by the area of the plot in question in m<sup>2</sup>_
 
 ### Running the Analysis
 #### Prerequisites
