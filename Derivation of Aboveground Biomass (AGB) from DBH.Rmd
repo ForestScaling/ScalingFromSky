@@ -1,0 +1,133 @@
+---
+title: "Derivation of Aboveground Biomass (AGB) from DBH"
+author: "Adam Eichenwald"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Introduction
+
+This document presents the derivation of an equation to calculate aboveground biomass (AGB) directly from diameter at breast height (DBH). The derivation uses two equations:
+1. AGB as a function of height (\(H\)) and canopy area (\(CA\)).
+2. DBH as a function of \(H\) and \(CA\).
+
+By substituting the expression for \(H \cdot CA\) from Equation 2 into Equation 1, we derive a direct relationship between AGB and DBH. These equations are taken from Jucker et al. 2017.
+
+---
+
+## Equations
+
+### Equation 1: AGB as a function of \(H\) and \(CA\)
+
+\[
+\text{AGB} = \left(0.016 + a'\right) \cdot (H \cdot CA)^{2.013 + b'} \cdot \exp\left(\frac{0.204^2}{2}\right)
+\]
+
+Where:
+- \(a'\) and \(b'\) are species-specific parameters.
+- \(H\) is canopy height.
+- \(CA\) is canopy area.
+
+For simplicity, let:
+\[
+m = (0.016 + a') \cdot \exp\left(\frac{0.204^2}{2}\right)
+\]
+This simplifies Equation 1 to:
+\[
+\text{AGB} = m \cdot (H \cdot CA)^{2.013 + b'}
+\]
+
+---
+
+### Equation 2: DBH as a function of \(H\) and \(CA\)
+
+\[
+\text{DBH} = a \cdot (H \cdot CA)^b \cdot \exp\left(\frac{g^2}{2}\right)
+\]
+
+Where:
+- \(a, b, g\) are biome-specific parameters.
+- \(H\) is canopy height.
+- \(CA\) is canopy area.
+
+For simplicity, let:
+\[
+k = a \cdot \exp\left(\frac{g^2}{2}\right)
+\]
+This simplifies Equation 2 to:
+\[
+\text{DBH} = k \cdot (H \cdot CA)^b
+\]
+
+---
+
+## Derivation
+
+### Step 1: Express \(H \cdot CA\) in terms of DBH
+
+From Equation 2:
+\[
+H \cdot CA = \left(\frac{\text{DBH}}{k}\right)^{1/b}
+\]
+
+---
+
+### Step 2: Substitute \(H \cdot CA\) into Equation 1
+
+Substitute \(H \cdot CA\) from above into the simplified Equation 1:
+\[
+\text{AGB} = m \cdot \left[\left(\frac{\text{DBH}}{k}\right)^{1/b}\right]^{2.013 + b'}
+\]
+
+---
+
+### Step 3: Simplify the Expression
+
+Distribute the exponent \(2.013 + b'\) across \(\left(\frac{\text{DBH}}{k}\right)^{1/b}\):
+\[
+\text{AGB} = m \cdot \left(\frac{\text{DBH}}{k}\right)^{\frac{2.013 + b'}{b}}
+\]
+
+Separate the terms into DBH and \(k\):
+\[
+\text{AGB} = m \cdot \text{DBH}^{\frac{2.013 + b'}{b}} \cdot k^{-\frac{2.013 + b'}{b}}
+\]
+
+Let:
+\[
+n = m \cdot k^{-\frac{2.013 + b'}{b}}
+\]
+This simplifies the equation to:
+\[
+\text{AGB} = n \cdot \text{DBH}^p
+\]
+
+Where:
+- \(n = m \cdot k^{-\frac{2.013 + b'}{b}}\), a constant that combines species and biome-specific parameters.
+- \(p = \frac{2.013 + b'}{b}\), the power exponent.
+
+---
+
+## Final Equation
+
+The final equation to calculate AGB directly from DBH is:
+\[
+\text{AGB} = n \cdot \text{DBH}^p
+\]
+
+---
+
+## Discussion
+
+### Why this Works
+The derivation leverages the relationships between DBH, canopy height (\(H\)), and canopy area (\(CA\)). By substituting \(H \cdot CA\) from the DBH equation into the AGB equation, we obtain a direct relationship between AGB and DBH. The constants \(n\) and \(p\) are determined by species and biome-specific parameters, ensuring that the equation accurately represents the underlying biology of tree growth.
+
+### Required Data
+To apply this equation, the following data are required:
+1. Species-specific parameters (\(a', b'\)) for the AGB equation.
+2. Biome-specific parameters (\(a, b, g\)) for the DBH equation.
+3. Measurements of DBH for trees in the area of interest.
+
+### Practical Use
+This equation allows for efficient estimation of AGB when DBH measurements are available. It is particularly useful in large-scale ecological studies, where direct measurement of \(H\) and \(CA\) may not be feasible, but DBH data are readily obtainable.
+
