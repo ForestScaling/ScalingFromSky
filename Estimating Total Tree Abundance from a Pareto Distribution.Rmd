@@ -1,0 +1,1090 @@
+---
+title: "Estimating Total Tree Abundance (\( N_{tot} \)) from a Pareto Distribution"
+author: "Adam Eichenwald"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Introduction
+
+Estimating the total number of trees (\( N_{tot} \)) in a forest based on a truncated size-abundance distribution presents a unique challenge. This document outlines a Bayesian framework for estimating \( N_{tot} \), leveraging:
+
+1. A Pareto distribution characterized by:
+   - A known minimum threshold (\( x_{\min} \)),
+   - A known alpha (\( \alpha \)) with uncertainty derived from the same dataset.
+2. Observed abundances (\( N \)) for diameter size classes \( x \in [x_{\text{cutoff}}, x_{\max}] \).
+3. Methods for selecting multiple \( x_{\text{cutoff}, k} \) values to account for uncertainty in the unobserved portion of the distribution.
+4. A prior for \( N_{tot} \), based on additional data or expert knowledge.
+
+This framework incorporates both uncertainty in \( \alpha \) and \( N \) across different \( x_{\text{cutoff}, k} \) values to provide a robust estimate of \( N_{tot} \).
+
+---
+
+## Procedure
+
+### Step 1: Define the Pareto Distribution
+
+The size-abundance relationship of tree diameters in the forest follows a Pareto distribution:
+
+\[
+p(x) = \frac{\alpha - 1}{x_{\min}} \left(\frac{x_{\min}}{x}\right)^{\alpha}, \quad x \geq x_{\min}.
+\]
+
+The total abundance (\( N_{tot} \)) is the integral of \( p(x) \) across the entire size range:
+
+\[
+N_{tot} = \int_{x_{\min}}^{x_{\max}} p(x) \, dx.
+\]
+
+For observed data, abundances (\( N \)) are available only for \( x \in [x_{\text{cutoff}}, x_{\max}] \). The challenge is to estimate the unobserved abundance for \( x \in [x_{\min}, x_{\text{cutoff}}) \).
+
+---
+
+### Step 2: Incorporate \( \alpha \) as a Preset Parameter with Uncertainty
+
+Since \( \alpha \) has already been estimated from the dataset, we incorporate it as a **preset parameter with uncertainty**:
+
+1. Use the estimated value of \( \alpha \) (\( \hat{\alpha} \)).
+2. Propagate uncertainty in \( \alpha \) using its confidence interval (CI):
+   \[
+   \alpha \sim \text{Normal}(\hat{\alpha}, \sigma_{\alpha}),
+   \]
+   where \( \sigma_{\alpha} \) is derived from the standard error of \( \alpha \).
+
+By drawing samples of \( \alpha \) during the analysis, we account for its variability in the final estimate of \( N_{tot} \).
+
+---
+
+### Step 3: Select \( x_{\text{cutoff}, k} \) Values
+
+To address uncertainty in the unobserved portion of the distribution, we generate multiple \( x_{\text{cutoff}, k} \) values such that:
+
+\[
+x_{\min} < x_{\text{cutoff, min}} \leq x_{\text{cutoff}, k} < x_{\max}.
+\]
+
+#### Methods for Selecting \( x_{\text{cutoff}_k} \)
+
+To determine effective cutoff points (\( x_{\text{cutoff}_k} \)) for segmenting the DBH distribution, we applied multiple strategies tailored to balance representation across the range of tree sizes while ensuring meaningful data segments. These methods are as follows:
+
+1. Use Quantiles of the Observed DBH Distribution
+
+This method ensures that cutoff points divide the data into meaningful segments based on the density of the observed DBH distribution.
+
+- **Approach:**
+    - Compute quantiles (e.g., 25th, 50th, and 75th percentiles) from the observed DBH distribution.
+    - Use these quantiles as \( x_{\text{cutoff}_k} \) values to create segments.
+- **Rationale:**
+    - Quantiles naturally adjust to the underlying data density, ensuring sufficient observations in each segment.
+    - This provides a balance between segment size and data representativeness.
+
+ \2. Maximize Overlap of Data Across Cutoffs
+
+To ensure that cutoff points capture a wide range of data while allowing for shared observations across segments:
+
+- **Approach:**
+    - Start with the smallest cutoff \( x_{\text{cutoff}_\text{min}} \), typically near the minimum observed DBH.
+    - Increment \( x_{\text{cutoff}_k} \) values by fractions of the observed DBH range (e.g., \( 1/n \) of the range, where \( n \) is the number of cutoffs).
+    - Use overlapping intervals, such as \([x_{\text{cutoff}_k}, x_{\text{max}}]\), to ensure no part of the distribution is excluded.
+- **Rationale:**
+    - Overlapping cutoffs ensure consistency and comparability across segments.
+    - This approach avoids gaps in the data while retaining flexibility for analyzing the distribution.
+
+3. Optimize Based on Information Content
+
+This method identifies cutoff points that maximize the amount of information captured about the unknown portion of the distribution (\( x < x_{\text{cutoff}_k} \)):
+
+- **Approach:**
+    - Evaluate an information criterion, such as entropy or variability, for the observed DBH distribution.
+    - Select \( x_{\text{cutoff}_k} \) values that correspond to regions of high variability or uncertainty.
+- **Rationale:**
+    - Cutoff points placed in high-variability regions focus the analysis on areas with the most uncertainty.
+    - This ensures that the selected \( x_{\text{cutoff}_k} \) values contribute maximally to reducing uncertainty in the total tree abundance estimate.
+
+4. Data-Driven Breakpoints (e.g., Piecewise Regression)
+
+This method uses natural transitions in the data, represented as breakpoints in the log-log relationship between DBH and tree density:
+
+- **Approach:**
+    - Fit a piecewise regression model to the log-log relationship of DBH and density.
+    - Use the fitted breakpoints as \( x_{\text{cutoff}_k} \) values.
+- **Rationale:**
+    - Breakpoints reflect regions where scaling behavior changes, making them ideal cutoff candidates.
+    - This approach aligns cutoff points with the data's structure and provides a meaningful segmentation.
+    
+    WON'T WORK WELL, SINCE IT SHOULD JUST BE A STRAIGHT LINE
+
+5. Evenly-Spaced Intervals on a Log Scale
+
+Given the scale-invariant nature of the Pareto distribution, evenly spaced intervals on a log-transformed scale provide a natural representation:
+
+- **Approach:**
+    - Log-transform all DBH values.
+    - Divide the range of \([ \log(x_{\text{min}}), \log(x_{\text{max}})]\) into evenly spaced intervals.
+    - Transform the interval boundaries back to the original scale to define \( x_{\text{cutoff}_k} \) values.
+- **Rationale:**
+    - This approach reflects the distribution's scale invariance.
+    - Smaller DBH values, which are more frequent, are better represented, while also including larger values in the analysis.
+- **Likely best method:**
+    - Use the logbin function from the forestscaling R package on DBH data and use the bin_midpoint and bin_max values as \( x_{\text{cutoff}_k} \) points.
+---
+
+### Step 4: Bayesian Framework for Estimating \( N_{tot} \)
+
+The Bayesian model integrates uncertainty across all components:
+
+1. **Likelihood**:
+   For each \( x_{\text{cutoff}, k} \), the likelihood is based on the observed \( N \) for \( x \in [x_{\text{cutoff}, k}, x_{\max}] \):
+   \[
+   \text{Likelihood: } N \sim \text{Poisson}(\lambda_k),
+   \]
+   where \( \lambda_k \) is the expected abundance for \( x \in [x_{\text{cutoff}, k}, x_{\max}] \) given the Pareto distribution.
+
+2. **Prior for \( N_{tot} \)**:
+   Use a prior distribution for \( N_{tot} \) informed by external data or expert knowledge:
+   \[
+   N_{tot} \sim \text{Normal}(\mu_{\text{prior}}, \sigma_{\text{prior}}),
+   \]
+   where \( \mu_{\text{prior}} \) and \( \sigma_{\text{prior}} \) are the mean and standard deviation of the prior.
+
+3. **Unobserved Range**:
+   For \( x \in [x_{\min}, x_{\text{cutoff}, k}) \), use the Pareto distribution to estimate the unobserved abundance:
+   \[
+   N_{\text{unobs}, k} = \int_{x_{\min}}^{x_{\text{cutoff}, k}} p(x) \, dx.
+   \]
+
+4. **Posterior**:
+   Combine the likelihood and prior to estimate the posterior distribution of \( N_{tot} \):
+   \[
+   p(N_{tot} | \text{data}) \propto p(\text{data} | N_{tot}) \, p(N_{tot}).
+   \]
+
+---
+
+### Step 5: Propagate Uncertainty
+
+1. **Monte Carlo Sampling**:
+   - Draw samples of \( \alpha \) from its uncertainty distribution.
+   - Repeat the calculation of \( N_{\text{unobs}, k} \) and \( N_{tot} \) for each \( x_{\text{cutoff}, k} \).
+
+2. **Aggregate Results**:
+   - Combine estimates of \( N_{tot} \) across all \( x_{\text{cutoff}, k} \) values.
+   - Report the mean and credible intervals of the posterior distribution for \( N_{tot} \).
+
+---
+
+## Workflow
+
+
+### Steps:
+1. **Precompute the Number of Trees per Bin**
+2. **Prepare Stan Data**
+3. **Define Stan Model**
+4. **Sample from the Posterior**
+
+## Step 1: Precompute the Number of Trees per Bin
+
+We start by binning the tree DBH data into log-scale intervals. Each bin will correspond to a range of DBH values, and the number of trees in each bin will be counted. This helps simplify the modeling process by reducing the complexity of continuous DBH data.
+
+We use a log-bin method to create evenly spaced bins in log space. For each bin, we calculate the number of trees within that range. The resulting data frame will contain the following columns:
+
+- `bin_min`: Lower bound of the bin (e.g., \( x_{\text{cutoff}_k} \)).
+- `bin_max`: Upper bound of the bin (e.g., \( x_{\text{max}} \)).
+- `N`: Number of trees in this bin.
+- `bin_midpoint`: Midpoint of the bin (which may be useful for further calculations).
+
+This is done outside of Stan, in R, using the logbin function.
+
+## Step 2: Prepare Stan Data
+
+In this step, you'll prepare the data for the Stan model. You need to pass the following data to Stan:
+
+- **Prior Data**: The prior means and standard deviations for \( \alpha \) and \( N_{\text{tot}} \), which will come from the `prior_data` data frame.
+- **Binned Data**: The precomputed `bin_min`, `bin_max`, and `N` for each bin.
+- **Number of Bins**: The total number of bins, which corresponds to the length of the binned data.
+
+
+```{r}
+
+# Generate alpha samples in R
+n_alpha_samples <- 100  # Number of samples
+alpha_samples <- rnorm(n_alpha_samples, mean = 1.54, sd = 0.037)
+
+
+
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry),#%>%
+                        # filter(dbh>=10),
+                      siteID == site)%>%
+    inner_join(expanded_neon_data%>%
+                 filter(siteID == site & stemDiameter >= 10)%>%
+                 distinct(plotID))
+  
+
+meters2<-fread("NEON_plots_TableToExcel.csv")%>%
+  select(siteID, plotID, sbpltID, area_m2)%>%
+  inner_join(full_neon_data%>%filter(stemDiameter>=10&stemDiameter<=50)%>%
+               distinct(plotID)#%>%
+                 # filter(stemDiameter >= 10)%>%
+                 # distinct(plotID)
+                 )%>%
+  group_by(siteID)%>%
+  summarize(total_area = sum(area_m2))
+library(data.table)
+library(dplyr)
+library(data.table)
+library(dplyr)
+
+# Load and process data
+data <- fread("Buff50_siteID_zonalTPA.csv") %>%
+  select(siteID, MEAN, STD) %>%
+  inner_join(meters2, by = "siteID")  # Assuming meters2 has "siteID" and "total_area"
+
+# Calculate the average and standard deviation of expected trees
+results <- data %>%
+  mutate(
+    # Convert trees per acre to trees per square meter
+    mean_trees_per_m2 = MEAN / 4046.856,  # 1 acre = 4046.856 square meters
+    
+    # Variance in trees per acre, converted to variance per square meter
+    variance_trees_per_m2 = (STD^2) / 4046.856,
+    
+    # Scale variance and mean to total area
+    expected_mean = mean_trees_per_m2 * total_area,
+    expected_variance = variance_trees_per_m2 * total_area,
+    expected_sd = sqrt(expected_variance)  # Standard deviation is sqrt of variance
+  ) %>%
+  select(siteID, expected_mean, expected_sd)
+
+# Print results
+print(results)
+
+
+```
+```{r}
+list1<-list()
+for(i in results%>%inner_join(remote_sensing_updated%>%distinct(siteID))%>%pull(siteID)){
+  resultsd<-results%>%
+    filter(siteID == i)
+
+# Parameters
+xmin <- 2.54        # Minimum DBH in cm
+alpha <- tausandalphasresults%>%filter(siteID == i)%>%
+  pull(mean)# Pareto shape parameter
+expected_mean <-resultsd%>%
+  pull(expected_mean)# Total expected number of trees
+
+# DBH range
+lower_bound <- 23
+#UPPER BOUND NEEDS TO CHANGE, DEPENDING ON THE UPPER BOUND OF THE DATA (maybe it should be truncated instead?)
+upper_bound <- 50
+
+# Calculate the fraction of trees in the range
+P_10_to_50 <- (xmin / lower_bound)^alpha - (xmin / upper_bound)^alpha
+
+# Calculate the number of trees in the range
+trees_in_range <- expected_mean * P_10_to_50
+
+# Output the result
+cat("Fraction of trees between 10 and 50 cm DBH:", round(P_10_to_50, 4), "\n")
+cat("Expected number of trees in this range:", round(trees_in_range, 2), "\n")
+list1[[length(list1)+1]]<-data.frame(trees_in_range_est = trees_in_range,
+                                   trees_in_range_act = expanded_neon_data%>%
+                                     filter(siteID == i&stemDiameter>=10&stemDiameter<=50)%>%
+                                     nrow(),
+                                   label = i)
+}
+
+ggplot(list1%>%
+  rbindlist(),aes(trees_in_range_act, trees_in_range_est, label = label))+geom_point() + 
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed")+geom_text()
+
+```
+
+```{r}
+library(splus2R)
+list<-list()
+for(site in unique(remote_sensing_updated$siteID)[-6]) {
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry)%>%
+                        filter(dbh<=50),
+                      siteID == site)
+if(nrow(site_data%>%filter(dbh>10))<25){
+  next
+}else{
+original_data<-site_data%>%
+  pull(dbh)
+
+library(dplyr)
+ # Kernel Density Estimation for DBH data
+  kde <- density(original_data, bw = "SJ")  # Adjust bandwidth as needed
+  xmin<-min(original_data)
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= max(original_data) & kde$x>=xmin],
+    y = kde$y[kde$x <=  max(original_data) & kde$x>=xmin]
+  )
+  
+  # Filter the KDE results to only keep values near the observed data (threshold = 1.5)
+  filtered_kde <- data.frame(
+    x = kde$x,
+    y = kde$y
+  ) %>%
+    rowwise() %>%
+    filter(any(abs(x - observed_dbhs) <= 0.5)) %>%
+    ungroup()
+# Assume original_data and observed_dbhs are defined
+n_bootstrap <- 1000  # Number of bootstrap samples
+xmin <- min(observed_dbhs)
+x_values <- filtered_kde$x  # Unique and sorted x-values from data
+
+# Generate bootstrap KDE
+n_bootstrap <- 1000  # Number of bootstrap samples
+
+
+# Use unique values of the original data as x_values
+x_values <- filtered_kde$x # Unique and sorted x-values from data
+
+# Perform bootstrap sampling and KDE estimation
+bootstrap_kdes <- replicate(
+  n_bootstrap,
+  {
+    sample_data <- sample(original_data, size = length(original_data), replace = TRUE)
+    density(sample_data)  # Kernel Density Estimation
+  },
+  simplify = FALSE
+)
+# Interpolate densities onto x_values
+densities1 <- sapply(bootstrap_kdes, function(kde) approx(kde$x, kde$y, xout = x_values)$y)
+densities <- rowMeans(densities1, na.rm = TRUE)
+ # Total observed data (number of trees)
+total_trees <- length(original_data)
+  
+# Estimated abundances by multiplying the densities by the total number of trees
+estimated_abundance <- densities * total_trees
+# Log-transform densities and calculate mean and SE
+mean_log_densities <- log10(estimated_abundance)
+# mean_log_densities <- rowMeans(log_densities, na.rm = TRUE)
+se_log_densities <- apply(densities1, 1, sd, na.rm = TRUE) / sqrt(n_bootstrap) / apply(densities1, 1, sd, na.rm = TRUE) # Standard error
+
+# Combine results into a data frame
+bootstrap_kde_log <- data.frame(
+  log_x = log10(x_values),  # Log10-transform x-values
+  mean_log_density = mean_log_densities,
+  se_log_density = se_log_densities
+)
+
+
+data<-peaks(bootstrap_kde_log$mean_log_density)%>%
+      cbind(bootstrap_kde_log)%>%
+      filter(.==TRUE)
+#     
+# data<-data%>%
+#       filter(mean_log_density>0)
+    # Apply 10^x to every numeric column
+   
+breakpoint = data%>%
+          filter(log_x<=quantile(log10(original_data), 0.75))%>%
+          # filter(mean_log_density  == max(mean_log_density ))%>%
+          filter(log_x==max(log_x))%>%
+          pull(log_x)
+list[[length(list)+1]]<-data.frame(site=site,breakpoint=breakpoint)
+}
+}
+
+breakpoints<-list%>%
+  rbindlist()
+```
+```{r}
+logbin_scores<-logbin <- function(x, y = NULL, scores = NULL, n) {
+    logx <- log10(x)
+    bin_edges <- seq(min(logx), max(logx), length.out = n + 1)
+    logxbin <- rep(NA, length(logx))
+    b <- bin_edges
+    b[length(b)] <- b[length(b)] + 1
+    for (i in 1:length(logx)) {
+        logxbin[i] <- sum(logx[i] >= b)
+    }
+    bin_midpoints <- numeric(n)
+    for (i in 1:n) {
+        bin_midpoints[i] <- mean(10^(bin_edges[i:(i + 1)]))
+    }
+    bin_widths <- diff(10^bin_edges)
+    bin_factor <- factor(logxbin, levels = 1:n)
+    bin_counts <- table(bin_factor)
+    
+    # If 'y' is provided, calculate bin values (e.g., density)
+    if (!is.null(y)) {
+        rawy <- tapply(y, bin_factor, sum)
+        rawy[is.na(rawy)] <- 0
+        bin_values <- as.numeric(rawy / bin_widths)
+    } else {
+        bin_values <- as.numeric(bin_counts / bin_widths)
+    }
+    
+    # Calculate average crown scores for each bin, if provided
+    if (!is.null(scores)) {
+        raw_scores <- tapply(scores, bin_factor, mean, na.rm = TRUE)  # Average crown score
+        raw_scores[is.na(raw_scores)] <- 0
+    } else {
+        raw_scores <- rep(NA, n)
+    }
+    
+    return(data.frame(
+        bin_midpoint = bin_midpoints,
+        bin_value = bin_values,
+        bin_count = as.numeric(bin_counts),
+        bin_min = 10^bin_edges[1:n],
+        bin_max = 10^bin_edges[2:(n + 1)],
+        avg_score = raw_scores  # Add average crown scores to output
+    ))
+}
+
+```
+
+```{r}
+# Input the data as a data frame
+Leaf_area_index <- data.frame(
+  site = c("ABBY", "BART", "BLAN", "BONA", "CLBJ", "CPER", "DCFS", "DEJU", "DELA", 
+           "DSNY", "GRSM", "GUAN", "HARV", "HEAL", "JERC", "JORN", "KONZ", "LAJA", 
+           "LENO", "MLBS", "MOAB", "NIWO", "NOGP", "ONAQ", "ORNL", "OSBS", "PUUM", 
+           "RMNP", "SCBI", "SERC", "SJER", "SOAP", "SRER", "STEI", "TALL", "TEAK", 
+           "TREE", "UKFS", "UNDE", "WREF", "YELL"),
+  Leaf_area_index = c(40.78947368, 49.46551724, 43.07142857, 34.88461538, 23.25, 
+                      9.928571429, 20, 14.81034483, 43.91666667, NA, 50.03125, 
+                      33.55, 54.26923077, 15.07692308, 16.80769231, 3, 36.72222222, 
+                      NA, 51.5, 46.86111111, 3.777777778, 8.25, 16.66666667, 6.55, 
+                      41.67647059, 16.08333333, NA, 12.78571429, 56.36363636, 47.875, 
+                      11.73529412, 22.96153846, 3.076923077, 53.04545455, 51.52631579, 
+                      13.05263158, 53.22, 46.73809524, 52.33333333, 37.61904762, 11.375)
+)
+
+# Remove rows with NA in the Leaf_area_index column
+Leaf_area_index <- na.omit(Leaf_area_index)
+
+# Divide the values in the Leaf_area_index column by 10
+Leaf_area_index$Leaf_area_index <- Leaf_area_index$Leaf_area_index / 10
+
+# Display the final data frame
+print(Leaf_area_index)
+
+```
+
+```{r}  
+bayesianlist<-list()
+scorefix<-fread("remote_sensing_updated_scorefix.csv")%>%select(left,top,bottom,right,score,final_height,dbh,plotID,siteID)
+for(i in tausandalphasresults$siteID[-c(18,26)]) {
+site_data <- subset(scorefix%>%#remote_sensing_updated%>%
+                        # data.frame()%>%
+                        # dplyr::select(-geometry)%>%
+                        filter(dbh<=50&dbh>=10),
+                      siteID == i)
+site_data<-site_data%>%
+  filter(dbh>=(10^(breakpoints%>%data.frame()%>%
+           dplyr::filter(site==i)%>%
+           pull(breakpoint))))#%>%
+  # filter(dbh>=quantile(site_data$dbh, 0.75))
+if(nrow(site_data)<25){
+  next
+}else{
+
+binned_data<-forestscaling::logbin(site_data%>%
+                                     # filter(dbh>=site_data$dbh%>%quantile(0.75) & dbh<=50)%>%
+                                     pull(dbh),site_data%>%pull(score), n =8)
+breakpoint<-(10^(breakpoints%>%data.frame()%>%
+           dplyr::filter(site==i)%>%
+           pull(breakpoint)))
+# Add the avg_score column by calculating average scores for each bin
+binned_data <- binned_data %>%
+  rowwise() %>%
+  mutate(avg_score = mean(
+    site_data %>%
+      filter(dbh >= bin_min & dbh < bin_max) %>%
+      pull(score),
+    na.rm = TRUE
+  )) %>%
+  ungroup()%>%
+  drop_na()
+
+
+# Generate alpha samples in R
+n_alpha_samples <- 100  # Number of samples
+taus<-tausandalphasresults%>%
+  filter(siteID == i)
+
+alpha_samples <- rnorm(n_alpha_samples, mean = taus%>%pull(mean), sd = taus%>%pull(sd))
+
+ DBH_max=subset(scorefix,
+                      siteID == i)%>%
+    pull(dbh)%>%max(na.rm=TRUE)
+# Normalize Breakpoint (relative to x_min and x_max) and add 1
+if(length((Leaf_area_index%>%filter(site == i)%>%pull(Leaf_area_index) / 6))==0){
+  next
+}else{
+  breakpoint_norm=((breakpoint - 10) / (ifelse(DBH_max>50,50,DBH_max) - 10))
+# Example Stan data preparation
+stan_data <- list(
+  K = nrow(binned_data),  # Number of bins
+  bin_min = binned_data$bin_min,
+  bin_max = binned_data$bin_max,
+  N_obs = binned_data$bin_count,
+  x_min = 10,
+  LAI_norm = (Leaf_area_index%>%filter(site == i)%>%pull(Leaf_area_index) / 10),
+  breakpoint_norm=ifelse(breakpoint_norm >0, breakpoint_norm, 0),
+  x_max=ifelse(DBH_max>50,50,DBH_max),
+  # avg_scores=binned_data$avg_score,
+  # Prior for alpha
+  n_alpha_samples = n_alpha_samples,
+  alpha_samples = alpha_samples,
+  
+  # Prior for Ntot
+  N_tot_prior_mean =1000,
+  N_tot_prior_sd = 500
+)
+ bayesianNtotmod<-sampling(stan_laibreakpoint_noscore_model,
+                          stan_data,
+                          chains =4,
+                          warmup=6000,
+                          iter=9000, refresh = 0)
+
+# if(breakpoint<=1 | min(site_data$dbh)<11){
+#   bayesianNtotmod<-sampling(stan_ntot_scores_nomissing_model,
+#                           stan_data,
+#                           chains = 4,
+#                           warmup=6000,
+#                           iter=9000, refresh =0)
+# }else{
+# bayesianNtotmod<-sampling(stan_ntot_scores_model,
+#                           stan_data,
+#                           chains = 4,
+#                           warmup=6000,
+#                           iter=9000, refresh =0)
+# if(DBH_max>50){
+# bayesianNtotmod<-sampling(stan_ntot_model,
+#                           stan_data,
+#                           chains = 4,
+#                           warmup=6000,
+#                           iter=9000, refresh =0)
+# }else{
+#   bayesianNtotmod<-sampling(stan_ntot_nonorm_model,
+#                           stan_data,
+#                           chains = 4,
+#                           # warmup=6000,
+#                           iter=4000, refresh =0)
+# }
+}
+bayesianlist[[length(bayesianlist)+1]]<-summarize_draws(bayesianNtotmod)%>%
+  mutate(site=i)%>%
+  filter(variable == "N_tot")%>%
+  mutate(N_tot_real = full_neon_data%>%
+           filter(siteID == i&stemDiameter>=10&stemDiameter<=50)%>%
+           filter(plotID %in% unique(site_data$plotID))%>%
+           nrow())
+print(paste(i))
+
+}
+}
+# bayesianlistcrownscore<-bayesianlist%>%
+#          rbindlist()
+
+# density<-fread("NEON_abvgrdbmassdens.csv")
+ggplot(bayesianlist%>%
+         rbindlist()%>%
+         inner_join(remote_sensing_updated%>%
+                      rename(site=siteID)%>%
+                      group_by(site)%>%
+                      summarize(max_dbh=max(dbh, na.rm=TRUE)))%>%
+         inner_join(breakpoints)%>%inner_join(data),aes(N_tot_real, mean,label = site))+geom_point()+geom_smooth(method = "lm")+
+    geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed")+geom_text()+geom_errorbar(aes(ymin = q5, ymax = q95))
+
+```
+## 3. Stan Model
+
+For the **individual-bin-only approach**, we will fit the model using only precomputed individual bins of DBH ranges and their corresponding counts. Since \( \alpha \) is already estimated, the Stan model will only estimate \( N_{\text{tot}} \), using the counts in each bin.
+
+The Stan model will use the following likelihood:
+
+\[
+N_k \sim \text{Poisson}(\lambda_k)
+\]
+where
+\[
+\lambda_k = N_{\text{tot}} \cdot \left( \frac{{\text{bin}_k^{1-\alpha} - \text{bin}_{k+1}^{1-\alpha}}}{{x_{\text{min}}^{1-\alpha}}} \right)
+\]
+
+Here:
+- \( N_k \): The observed count of trees in the \( k \)-th DBH bin.
+- \( \text{bin}_k \) and \( \text{bin}_{k+1} \): The minimum and maximum DBH for the \( k \)-th bin.
+- \( x_{\text{min}} \): The minimum DBH threshold (e.g., 3 cm).
+- \( \alpha \): The pre-estimated power-law exponent.
+
+The goal is to estimate \( N_{\text{tot}} \), the total number of trees with \( \text{DBH} \geq x_{\text{min}} \).
+
+### Stan Model Code
+
+Here’s the Stan model for the individual-bin-only approach:
+
+```{r}
+
+
+stan_ntot<-"
+data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of bins
+  real<lower=0> bin_max[K];      // Upper bounds of bins
+  int<lower=0> N_obs[K];         // Observed counts per bin
+  real<lower=0> x_min;           // Minimum DBH threshold
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+   real trunc_correction = (x_min^(1 - alpha_sample) - 50^(1 - alpha_sample));
+  lambda[k] = N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+            trunc_correction;
+    }
+    log_lik[j] = poisson_lpmf(N_obs | lambda); // Likelihood for this alpha
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+"
+
+
+
+stan_ntot_model<-stan_model(model_code=stan_ntot)
+
+stan_ntot_no_norm <- "
+data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of bins
+  real<lower=0> bin_max[K];      // Upper bounds of bins
+  int<lower=0> N_obs[K];         // Observed counts per bin
+  real<lower=0> x_min;           // Minimum DBH threshold
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Calculate expected counts for each bin
+    for (k in 1:K) {
+      lambda[k] = N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  (x_min^(1 - alpha_sample));
+    }
+
+    log_lik[j] = poisson_lpmf(N_obs | lambda); // Likelihood for this alpha
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+"
+stan_ntot_nonorm_model<-stan_model(model_code=stan_ntot_no_norm)
+
+```
+
+```{r}
+stan_ntot_scores<-"data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of DBH for bins
+  real<lower=0> bin_max[K];      // Upper bounds of DBH for bins
+  real<lower=0> N_obs[K];        // Observed counts per bin (now continuous)
+  real<lower=0, upper=1> avg_scores[K];  // Average or median score for each bin
+  real<lower=0> x_min;           // Minimum DBH threshold
+  real<lower=0> x_max;           // Maximum DBH threshold (e.g., 50)
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+  real<lower=0> sigma;           // Standard deviation for normal likelihood
+}
+
+transformed parameters {
+  real weighted_obs[K];          // Continuous weighted observed counts
+  for (k in 1:K) {
+    weighted_obs[k] = N_obs[k] * avg_scores[k]; // Scale observations by scores
+  }
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Prior for sigma
+  sigma ~ normal(0, 1);  // Adjust this based on the scale of your data
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    real trunc_correction;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Compute the normalization constant for the truncated power-law distribution
+    trunc_correction = (x_min^(1 - alpha_sample) - x_max^(1 - alpha_sample));
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+      lambda[k] = N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  trunc_correction;  // Normalized lambda
+    }
+    log_lik[j] = normal_lpdf(weighted_obs | lambda, sigma); // Likelihood for this alpha
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+"
+
+stan_ntot_scores_model<-stan_model(model_code=stan_ntot_scores)
+
+
+
+stan_ntot_scores_nomissing<-"data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of DBH for bins
+  real<lower=0> bin_max[K];      // Upper bounds of DBH for bins
+  real<lower=0> N_obs[K];        // Observed counts per bin (now continuous)
+  real<lower=0, upper=1> avg_scores[K];  // Average or median score for each bin
+  real<lower=0> x_min;           // Fixed minimum DBH threshold
+  real<lower=0> x_max;           // Fixed maximum DBH threshold
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+  real<lower=0> sigma;           // Standard deviation for normal likelihood
+}
+
+transformed parameters {
+  real weighted_obs[K];          // Continuous weighted observed counts
+  for (k in 1:K) {
+    weighted_obs[k] = N_obs[k] * avg_scores[k]; // Scale observations by scores
+  }
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Prior for sigma
+  sigma ~ normal(0, 1);  // Adjust this based on the scale of your data
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    real trunc_correction;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Compute the normalization constant for the truncated power-law distribution
+    trunc_correction = (x_min^(1 - alpha_sample) - x_max^(1 - alpha_sample));
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+      lambda[k] = N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  trunc_correction;  // Normalized lambda
+    }
+    log_lik[j] = normal_lpdf(weighted_obs | lambda, sigma); // Likelihood for this alpha
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+"
+
+stan_ntot_scores_nomissing_model<-stan_model(model_code=stan_ntot_scores_nomissing)
+
+
+```
+
+```{r}
+
+stan_ntot_scores_obserror<-"data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of DBH for bins
+  real<lower=0> bin_max[K];      // Upper bounds of DBH for bins
+  real<lower=0> N_obs[K];        // Observed counts per bin (now continuous)
+  real<lower=0, upper=1> avg_scores[K];  // Average or median score for each bin
+  real<lower=0> x_min;           // Minimum DBH threshold
+  real<lower=0> x_max;           // Maximum DBH threshold (e.g., 50)
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+  real<lower=0> sigma;           // Base standard deviation for normal likelihood
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Prior for sigma
+  sigma ~ normal(0, 1);  // Adjust this based on the scale of your data
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    real trunc_correction;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Compute the normalization constant for the truncated power-law distribution
+    trunc_correction = (x_min^(1 - alpha_sample) - x_max^(1 - alpha_sample));
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+      lambda[k] = N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  trunc_correction;  // Normalized lambda
+    }
+
+    // Compute the log-likelihood for this alpha
+    log_lik[j] = 0;
+    for (k in 1:K) {
+      real sigma_k = sigma / avg_scores[k]; // Bin-specific standard deviation
+      log_lik[j] += normal_lpdf(N_obs[k] | lambda[k], sigma_k);
+    }
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+"
+
+stan_ntot_scores_obserror_model<-stan_model(model_code = stan_ntot_scores_obserror)
+```
+
+
+```{r}
+stan_ntot_scores_obserror_laibreakpoint<-"data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of DBH for bins
+  real<lower=0> bin_max[K];      // Upper bounds of DBH for bins
+  real<lower=0> N_obs[K];        // Observed counts per bin (now continuous)
+  real<lower=0, upper=1> avg_scores[K];  // Average or median score for each bin
+  real<lower=0> x_min;           // Minimum DBH threshold
+  real<lower=0> x_max;           // Maximum DBH threshold (e.g., 50)
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+  real<lower=0, upper=1> breakpoint_norm; // Normalized breakpoint value (higher = less confident)
+  real<lower=0, upper=1> LAI_norm;        // Normalized LAI value (higher = less confident)
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+  real<lower=0> sigma;           // Base standard deviation for normal likelihood
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Compute the adjustment factor
+real adjustment_factor = 1 - sqrt(LAI_norm * breakpoint_norm);
+real adjusted_N_tot = N_tot / adjustment_factor;
+
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Prior for sigma
+  sigma ~ normal(0, 1);  // Adjust this based on the scale of your data
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    real trunc_correction;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Compute the normalization constant for the truncated power-law distribution
+    trunc_correction = (x_min^(1 - alpha_sample) - x_max^(1 - alpha_sample));
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+      lambda[k] = adjusted_N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  trunc_correction;  // Normalized lambda
+    }
+
+    // Compute the log-likelihood for this alpha
+    log_lik[j] = 0;
+    for (k in 1:K) {
+      real sigma_k = sigma / avg_scores[k]; // Bin-specific standard deviation
+      log_lik[j] += normal_lpdf(N_obs[k] | lambda[k], sigma_k);
+    }
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+
+
+"
+stan_ntot_scores_obserror_laibreakpoint_model<-stan_model(model_code=stan_ntot_scores_obserror_laibreakpoint)
+
+
+stan_laibreakpoint_noscore<-"data {
+  int<lower=1> K;                // Number of bins
+  real<lower=0> bin_min[K];      // Lower bounds of DBH for bins
+  real<lower=0> bin_max[K];      // Upper bounds of DBH for bins
+  real<lower=0> N_obs[K];        // Observed counts per bin (now continuous)
+  real<lower=0> x_min;           // Minimum DBH threshold
+  real<lower=0> x_max;           // Maximum DBH threshold (e.g., 50)
+  int<lower=1> n_alpha_samples;  // Number of pre-sampled alphas
+  real alpha_samples[n_alpha_samples]; // Pre-sampled alpha values
+  real<lower=0> N_tot_prior_mean; // Mean of the prior for N_tot
+  real<lower=0> N_tot_prior_sd;   // SD of the prior for N_tot
+  real<lower=0, upper=1> breakpoint_norm; // Normalized breakpoint value (higher = less confident)
+  real<lower=0, upper=1> LAI_norm;        // Normalized LAI value (higher = less confident)
+}
+
+parameters {
+  real<lower=0> N_tot;           // Total number of trees with DBH >= x_min
+  real<lower=0> sigma;           // Base standard deviation for normal likelihood
+}
+
+model {
+  vector[K] lambda;               // Expected counts for each bin
+  real log_lik[n_alpha_samples];  // Log-likelihoods for each alpha sample
+
+  // Compute the adjustment factor
+  real adjustment_factor = 1 - sqrt(LAI_norm * breakpoint_norm);
+  real adjusted_N_tot = N_tot / adjustment_factor;
+
+  // Prior for N_tot
+  N_tot ~ normal(N_tot_prior_mean, N_tot_prior_sd);
+
+  // Prior for sigma
+  sigma ~ normal(0, 1);  // Adjust this based on the scale of your data
+
+  // Marginalize over alpha uncertainty
+  for (j in 1:n_alpha_samples) {
+    real alpha_sample;
+    real trunc_correction;
+    alpha_sample = alpha_samples[j];  // Use pre-sampled alpha
+
+    // Compute the normalization constant for the truncated power-law distribution
+    trunc_correction = (x_min^(1 - alpha_sample) - x_max^(1 - alpha_sample));
+
+    // Calculate expected counts for each bin for this alpha
+    for (k in 1:K) {
+      lambda[k] = adjusted_N_tot * (bin_min[k]^(1 - alpha_sample) - bin_max[k]^(1 - alpha_sample)) /
+                  trunc_correction;  // Normalized lambda
+    }
+
+    // Compute the log-likelihood for this alpha
+    log_lik[j] = 0;
+    for (k in 1:K) {
+      real sigma_k = sigma;  // No crown score adjustment
+      log_lik[j] += normal_lpdf(N_obs[k] | lambda[k], sigma_k);
+    }
+  }
+
+  // Combine likelihoods across alpha samples
+  target += log_sum_exp(log_lik) - log(n_alpha_samples);
+}
+
+"
+stan_laibreakpoint_noscore_model<-stan_model(model_code=stan_laibreakpoint_noscore)
+```
+## Notes
+
+- **Likelihood:** The Poisson distribution models the observed counts \( N_k \) in each bin, given the expected counts \( \lambda_k \).
+- **Parameter \( N_{\text{tot}} \):** Represents the total number of trees across all bins with \( \text{DBH} \geq x_{\text{min}} \).
+- **\( \alpha \):** Fixed as a data input, so we don’t estimate it.
+
+---
+
+## Next Steps
+
+### 1. Prepare Stan Data
+- Create vectors `bin_min`, `bin_max`, and `N_obs` for the binned data.
+- Pass \( x_{\text{min}} \) and \( \alpha \) as data inputs.
+
+### 2. Compile and Fit the Model
+- Use `rstan` or `cmdstanr` to compile and run the model.
+
+### 3. Extract and Interpret Results
+- Extract the posterior distribution for \( N_{\text{tot}} \).
+- Summarize and visualize the posterior to check the fit.
+
+## 4. Prepare Stan Data
+
+To fit the Stan model, we need to prepare the following data inputs in R:
+
+1. **`K`:** The number of bins (i.e., the length of the binned data).
+2. **`bin_min`:** A vector containing the lower bounds of each DBH bin.
+3. **`bin_max`:** A vector containing the upper bounds of each DBH bin.
+4. **`N_obs`:** A vector containing the observed counts of trees in each bin.
+5. **`x_min`:** The minimum DBH threshold (e.g., 3 cm).
+6. **`alpha`:** The pre-estimated value of \( \alpha \).
+
+Here’s how we can prepare these inputs in R:
+
+```{r}
+bayesianNtotmod<-sampling(stan_ntot_model,
+                          stan_data,
+                          chains = 4,
+                          iter=4000,refresh=0)
+bayesianNtotmod
+```
+
+
+
+

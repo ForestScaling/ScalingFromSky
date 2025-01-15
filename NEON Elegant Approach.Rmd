@@ -1,0 +1,823 @@
+---
+title: "NEON Elegant Approach"
+author: "Adam Eichenwald"
+date: "2024-12-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+stan_density1_withprior<-"data {
+  int<lower=0> N;                   // Number of observations
+  real<lower=0> x_min;              // Minimum threshold for the Pareto distribution
+  vector<lower=0>[N] x;             // Observed data
+  real mean_crown_scor;             // Average crown score
+  real sd_crown_scor;               // Standard deviation of crown scores
+  real prior_mean;                  // Prior mean for alpha
+  real prior_base_sd;               // Base standard deviation for the prior
+}
+
+parameters {
+  real<lower=0> alpha;              // Shape parameter for the Pareto distribution
+}
+
+transformed parameters {
+  real prior_sd_adjusted;           // Adjusted prior standard deviation
+
+  // Adjust the prior precision based on mean crown score
+  prior_sd_adjusted = prior_base_sd / (1 + exp(-10 * (mean_crown_scor - 0.45)));
+}
+
+model {
+  // Prior for alpha, weighted by crown score confidence
+  alpha ~ normal(prior_mean, prior_sd_adjusted) T[0, ];
+
+  // Likelihood: Pareto distribution
+  x ~ pareto(x_min, alpha);
+}
+"
+stan_density1_withprior_model<-stan_model(model_code = stan_density1_withprior)
+```
+
+
+```{r}
+
+results_df <- data.frame(
+  siteID = character(),
+  Alpha_Mean = numeric(),
+  Alpha_Lower_CI = numeric(),
+  Alpha_Upper_CI = numeric(),
+  Tau = numeric(),
+  Warnings = character(),
+  stringsAsFactors = FALSE
+)
+
+sites <- unique(remote_sensing_updated$siteID)
+for (site in sites) {
+  # Subset data for the current site
+  site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry),#%>%
+                        # filter(dbh>=10),
+                      siteID == site)%>%
+    inner_join(neonregressionoutput)
+  
+  if(nrow(site_data) < 25){
+    next
+  }
+  # Use tryCatch to handle errors
+  breakpoint <- tryCatch({
+    calculate_breakpoint(site_data$dbh, xmin= min(site_data$dbh)) # Try to calculate the breakpoint
+  }, error = function(e) {
+    message(paste("Error for site:", site, "Skipping to next site."))
+    return("NA") # Return NA if there's an error
+  })
+  
+  if (is.data.frame(breakpoint)) {
+    trunc_point <- breakpoint$breakpoint
+  } else {
+  next
+    }
+  
+  site_data<-site_data%>%
+    filter(dbh>=trunc_point& dbh>=10)
+  
+if(nrow(site_data) < 25){
+    next
+  }
+#   
+# stan_data<-list(
+#   N = nrow(site_data),
+#   x_min = min(site_data$dbh),
+#   x_max=max(site_data$dbh),
+#   x=site_data$dbh)
+# 
+# fit1<-sampling(
+#   density_2_model,
+#   data = stan_data,
+#   iter=2000,
+#   chains = 4
+# )
+# 
+# tau<-summary(fit1, pars = "tau")$summary[1]
+# 
+site_data<-site_data%>%
+    filter(dbh<=tau & dbh >= 10)
+
+  stan_data <- list(
+    N = nrow(site_data),
+    x_min = 10,
+    trunc_point = trunc_point,
+    trunc_upper=max(site_data$dbh),
+    mean_crown_scor = mean(site_data$score),
+    sd_crown_scor = sd(site_data$score),
+    x = site_data$dbh,
+    prior_mean=unique(site_data$prior_mean),
+    prior_base_sd = unique(site_data$prior_sd),
+    prior_sd=unique(site_data$prior_sd)
+  )
+
+  fit<-sampling(
+      stan_neon_alpha_crownscorefix_model,
+      data = stan_data,
+      warmup=6000,
+      iter = 9000,
+      chains = 4
+    )
+    summary_alpha <- summary(fit, pars = "alpha")$summary
+    alpha_mean <- summary_alpha["alpha", "mean"]
+    alpha_lower <- summary_alpha["alpha", "2.5%"]
+    alpha_upper <- summary_alpha["alpha", "97.5%"]
+    
+    # Add to results data frame
+    results_df <- results_df %>%
+      add_row(
+        siteID = site,
+        Alpha_Mean = alpha_mean,
+        Alpha_Lower_CI = alpha_lower,
+        Alpha_Upper_CI = alpha_upper,
+        Tau = tau,
+        Warnings = NA
+      )
+   
+  }
+
+
+
+```
+
+```{r}
+library(splus2R)
+results_df <- data.frame(
+  siteID = character(),
+  Alpha = numeric(),
+  R2=numeric()
+)
+
+# Function to calculate the breakpoint for a single plot
+for(site in unique(remote_sensing_updated$siteID)[-6]) {
+  
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry)%>%
+                        filter(dbh<=50),
+                      siteID == site)%>%
+    inner_join(neonregressionoutput)#%>%
+  # inner_join(vst$vst_perplotperyear%>%
+  #              filter(nlcdClass == "deciduousForest"|
+  #                       nlcdClass == "mixedForest"|
+  #                       nlcdClass == "evergreenForest")%>%
+  #              select(plotID)%>%
+  #              distinct())
+
+  # Filter DBH values to be within the range of interest (<= 50)
+  # observed_dbhs <- observed_dbhs[observed_dbhs >= xmin & observed_dbhs<=50]
+  observed_dbhs <- site_data$dbh
+  
+  if (length(observed_dbhs) < 10) {
+    return(NA)  # Return NA if there aren't enough data points
+  }
+  
+  # Kernel Density Estimation for DBH data
+  kde <- density(observed_dbhs, bw = "nrd0")  # Adjust bandwidth as needed
+  xmin<-min(observed_dbhs)
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= max(observed_dbhs) & kde$x>=xmin],
+    y = kde$y[kde$x <=  max(observed_dbhs) & kde$x>=xmin]
+  )
+  
+  # Filter the KDE results to only keep values near the observed data (threshold = 1.5)
+  filtered_kde <- data.frame(
+    x = kde$x,
+    y = kde$y
+  ) %>%
+    rowwise() %>%
+    filter(any(abs(x - observed_dbhs) <= 0.5)) %>%
+    ungroup()
+  
+  # Update kde$x and kde$y with the filtered values
+  kde <- list(
+    x = filtered_kde$x,
+    y = filtered_kde$y
+  )
+  
+  # Total observed data (number of trees)
+  total_trees <- length(observed_dbhs)
+  
+  # Estimated abundances by multiplying the densities by the total number of trees
+  estimated_abundance <- kde$y * total_trees
+  
+  # Apply log10 transformation to both DBH and abundance
+  log_x <- log10(kde$x)  # Log10 of DBH values
+  log_y <- log10(estimated_abundance)  # Log10 of abundance values
+  
+  # Create a data frame with log-transformed values
+  df <- data.frame(x = log_x, y = log_y) %>%
+    filter(is.infinite(y) == FALSE)
+  
+  # Fit a simple linear regression model to the log-transformed data
+  # fit <- lm(y ~ x, data = df)
+  
+  # psi_value <- ifelse(max(observed_dbhs)/2 < min(observed_dbhs),
+  #                     min(df$x),
+  #                     log10(max(observed_dbhs)/2))
+  # psi_value<-ifelse(30<max(observed_dbhs),
+  #                  log10(30),
+  #                  log10(max(observed_dbhs)/2))
+  # 
+  # psi_value<-df%>%
+  #   filter(y==max(y))%>%
+  #   pull(x)
+  # print(plot)
+  # Fit a piecewise regression model to the linear model
+  # segmented.fit <- segmented(fit, seg.Z = ~x, psi = psi_value)
+  # segmented.fit <- selgmented(fit,  seg.Z = ~x, type = "aic", Kmax = 4)  
+  
+  
+    data<-splus2R::peaks(df$y)%>%
+      cbind(df)%>%
+      filter(.==TRUE)
+    
+    data<-data%>%
+      filter(y>0)
+    # Apply 10^x to every numeric column
+   
+   breakpoint = data%>%
+          filter(x<=quantile(log10(observed_dbhs), 0.75))%>%
+          filter(x==max(x))%>%
+          pull(x)
+
+   # if(breakpoint<log10(10)){
+   #   breakpoint <- log10(10)
+   # }
+   final_data<-df%>%
+        filter(x>=breakpoint)%>%
+     ##For filtering out anything below 10, the xmin
+             filter(x>=1)
+   if(nrow(final_data)>=10){
+   fit<-lm(data=final_data,
+      y~x)
+   # selgmented(fit, seg.Z = ~x, type = "score")
+     # Add to results data frame
+    results_df <- results_df %>%
+      add_row(
+        siteID = site,
+        Alpha = abs(fit$coefficients[2])-1,
+        R2 = summary(fit)$r.squared
+
+      )
+   }else{
+     next
+   }
+  }
+results_df<-results_df%>%
+         filter(R2 >= .8)%>%
+        filter(Alpha > 0 &
+                 Alpha < 5)%>%
+         filter(siteID != "DEJU")
+# print(results_df)
+
+plot<-ggplot(results_df%>%
+         rename(Alpha_Mean=Alpha)%>%
+         # rename(plotID = siteID)%>%
+         # separate(plotID, into = c("siteID","number"), remove = FALSE)%>%
+         inner_join(remote_sensing_updated%>%
+                      group_by(siteID)%>%
+                      summarize(score=mean(score),
+                                max_dbh = max(dbh)))%>%
+         # filter(siteID != "GUAN"& siteID != "HEAL"&siteID != "BONA"&
+         #          siteID != "DEJU"&siteID != "RMNP")%>%
+         # filter(Site != "HEAL" & Site != "DEJU"&
+         #          Site != "BONA" & Site != "SRER")%>%
+         # inner_join(alpha_results%>%
+         #              dplyr::select(alpha, siteID)
+         inner_join(tausandalphasresults%>%
+                      rename(alpha=mean)), aes(alpha, Alpha_Mean, color = R2,label = siteID)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Recovering Ntot for NEON plots\n(Model Output)",
+       x = "True Ntot", y = "Estimated Ntot") +
+  geom_text() +# geom_errorbar(aes(ymin = Alpha_Lower_CI, ymax = Alpha_Upper_CI))+
+  theme_minimal()+geom_smooth(method = "lm")
+
+print(plot)
+
+```
+
+
+```{r}
+results_smoothing<-results_df%>%
+         filter(R2 >= .8)%>%
+         filter(siteID != "DEJU")%>%
+         rename(Alpha_Mean=Alpha)%>%
+         # rename(plotID = siteID)%>%
+         # separate(plotID, into = c("siteID","number"), remove = FALSE)%>%
+         inner_join(remote_sensing_updated%>%
+                      group_by(siteID)%>%
+                      summarize(score=mean(score),
+                                max_dbh = max(dbh)))%>%
+         # filter(siteID != "GUAN"& siteID != "HEAL"&siteID != "BONA"&
+         #          siteID != "DEJU"&siteID != "RMNP")%>%
+         # filter(Site != "HEAL" & Site != "DEJU"&
+         #          Site != "BONA" & Site != "SRER")%>%
+         # inner_join(alpha_results%>%
+         #              dplyr::select(alpha, siteID)
+         inner_join(tausandalphasresults%>%
+                      rename(alpha=mean))
+
+summary(lm(data=results_smoothing, Alpha_Mean ~ alpha))
+
+```
+
+bootstrapping
+```{r}
+# results_bootstrap <- data.frame(
+#   siteID = character(),
+#   Alpha = numeric()
+# )
+results_bootstrap<-data.frame(
+  variable = character(),
+  site = character(),
+  mean=numeric(),
+  median=numeric(),
+  alpha = numeric(),
+  sd = numeric(),
+  mad=numeric(),
+  q5 = numeric(),
+  q95 = numeric(),
+  rhat = numeric(),
+  rhat = numeric(),
+  ess_bulk = numeric(),
+  ess_tail = numeric(),
+  R2 = numeric()
+)
+for(site in unique(remote_sensing_updated$siteID)[-6]) {
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry)%>%
+                        filter(dbh<=50),
+                      siteID == site)
+if(nrow(site_data%>%filter(dbh>10))<25){
+  next
+}else{
+original_data<-site_data%>%
+  pull(dbh)
+
+library(dplyr)
+ # Kernel Density Estimation for DBH data
+  kde <- density(original_data, bw = "SJ")  # Adjust bandwidth as needed
+  xmin<-min(original_data)
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= max(original_data) & kde$x>=xmin],
+    y = kde$y[kde$x <=  max(original_data) & kde$x>=xmin]
+  )
+  
+  # Filter the KDE results to only keep values near the observed data (threshold = 1.5)
+  filtered_kde <- data.frame(
+    x = kde$x,
+    y = kde$y
+  ) %>%
+    rowwise() %>%
+    filter(any(abs(x - observed_dbhs) <= 0.5)) %>%
+    ungroup()
+# Assume original_data and observed_dbhs are defined
+n_bootstrap <- 1000  # Number of bootstrap samples
+xmin <- min(observed_dbhs)
+x_values <- filtered_kde$x  # Unique and sorted x-values from data
+
+# Generate bootstrap KDE
+n_bootstrap <- 1000  # Number of bootstrap samples
+
+
+# Use unique values of the original data as x_values
+x_values <- filtered_kde$x # Unique and sorted x-values from data
+
+# Perform bootstrap sampling and KDE estimation
+bootstrap_kdes <- replicate(
+  n_bootstrap,
+  {
+    sample_data <- sample(original_data, size = length(original_data), replace = TRUE)
+    density(sample_data)  # Kernel Density Estimation
+  },
+  simplify = FALSE
+)
+# Interpolate densities onto x_values
+densities1 <- sapply(bootstrap_kdes, function(kde) approx(kde$x, kde$y, xout = x_values)$y)
+densities <- rowMeans(densities1, na.rm = TRUE)
+ # Total observed data (number of trees)
+total_trees <- length(original_data)
+  
+# Estimated abundances by multiplying the densities by the total number of trees
+# estimated_abundance <- densities * total_trees
+# Log-transform densities and calculate mean and SE
+mean_log_densities <- log10(densities)
+# mean_log_densities <- rowMeans(log_densities, na.rm = TRUE)
+se_log_densities <- apply(densities1, 1, sd, na.rm = TRUE) / sqrt(n_bootstrap) / apply(densities1, 1, sd, na.rm = TRUE) # Standard error
+
+# Combine results into a data frame
+bootstrap_kde_log <- data.frame(
+  log_x = log10(x_values),  # Log10-transform x-values
+  mean_log_density = mean_log_densities,
+  se_log_density = se_log_densities
+)
+
+
+data<-peaks(bootstrap_kde_log$mean_log_density)%>%
+      cbind(bootstrap_kde_log)%>%
+      filter(.==TRUE)
+#     
+# data<-data%>%
+#       filter(mean_log_density>0)
+    # Apply 10^x to every numeric column
+   
+breakpoint = data%>%
+          filter(log_x<=quantile(log10(original_data), 0.75))%>%
+          # filter(mean_log_density  == max(mean_log_density ))%>%
+          filter(log_x==max(log_x))%>%
+          pull(log_x)
+bootstrap_kde_log<-bootstrap_kde_log%>%
+  filter(log_x>=breakpoint)
+
+# Visualize the log-transformed KDE
+library(ggplot2)
+ggplot(bootstrap_kde_log, aes(x = log_x, y = mean_log_density)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = mean_log_density - se_log_density, ymax = mean_log_density + se_log_density), alpha = 0.2) +
+  labs(x = "Log10(X)", y = "Log10(Density)") +
+  theme_minimal()
+
+
+# Prepare data for the Bayesian model
+bayesian_data <- bootstrap_kde_log %>%
+  select(log_x, mean_log_density, se_log_density) %>%
+  rename(log_y = mean_log_density, se = se_log_density)#%>%
+  # filter(taudataframe%>%
+  #          filter(siteID == site)%>%
+  #          pull(tau))
+# 
+# prelimmod<-lm(data=bayesian_data, log_y~log_x)
+# piecewise<-selgmented(prelimmod)
+# 
+# bayesian_data<-bayesian_data%>%
+#   mutate(id.group = piecewise$id.group)%>%
+#   full_join(data.frame(slopes=piecewise$coefficients[2:(1+unique(piecewise$id.group)%>%
+#   length())], id.group=unique(piecewise$id.group)))
+
+# bayesian_data<-bayesian_data%>%
+#   filter(slopes<=-1 & slopes >=-6)%>%
+#   filter(id.group == min(id.group))
+if(nrow(bayesian_data) == 0){
+  print(paste(site, "does not meet the requirements to fit a model"))
+}else{
+# Transform slope prior mean from alpha to slope
+site_priors <- neonregressionoutput %>%
+  mutate(slope_prior_mean = -(prior_mean + 1))%>%
+  filter(siteID==site)
+
+slope_prior_mean<-site_priors$slope_prior_mean
+slope_prior_sd <- site_priors$prior_sd
+# Define priors
+priors <- 
+  set_prior(paste0("normal(",slope_prior_mean,",", slope_prior_sd,")"), class = "b")  # Slope prior                                # Intercept prior
+
+# Fit the Bayesian model
+bayesian_model <- brm(
+  log_y | se(se, sigma = TRUE)~ log_x,  # Response with SE modeled   
+  data = bayesian_data,
+  family = gaussian(),     # Linear regression
+  prior = priors,
+  iter = 4000,             # Number of iterations
+  warmup = 2000,           # Warmup steps
+  chains = 4,
+  refresh = 0# Number of chains
+)
+
+# Summarize results
+summary(bayesian_model)
+
+# Posterior plots
+plot(bayesian_model)
+
+# Posterior predictive checks
+pp_check(bayesian_model)
+
+# results_bootstrap <- results_bootstrap%>%
+#       add_row(
+#         siteID = site,
+#         Alpha = abs(fixef(bayesian_model)[2,1])-1
+#         )
+results_bootstrap<-rbind(results_bootstrap,
+                         summarise_draws(bayesian_model)%>%
+                           filter(variable == "b_log_x")%>%
+                           mutate(alpha =  abs(mean)-1)%>%
+                           mutate(site = site)%>%
+                           mutate(R2= performance::r2(bayesian_model)$R2_Bayes))
+print(paste(site))
+}
+}
+}
+
+
+ggplot(results_bootstrap%>%
+         filter(R2 >=0.8)%>%
+         filter(alpha >0 &alpha<5)%>%
+         rename(Alpha_Mean=alpha)%>%
+         rename(siteID = site)%>%
+         # separate(plotID, into = c("siteID","number"), remove = FALSE)%>%
+         # inner_join(remote_sensing_updated%>%
+         #              group_by(siteID)%>%
+         #              summarize(score=mean(score),
+         #                        max_dbh = max(dbh)))%>%
+         # filter(Site != "HEAL" & Site != "DEJU"&
+         #          Site != "BONA" & Site != "SRER")%>%
+         # inner_join(alpha_results%>%
+         #              dplyr::select(alpha, siteID)
+         inner_join(tausandalphasresults%>%
+                      rename(alpha=mean)%>%
+                      select(alpha, siteID)), aes(alpha, Alpha_Mean,label = siteID)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Recovering Ntot for NEON plots\n(Model Output)",
+       x = "True Ntot", y = "Estimated Ntot") +
+  geom_text() +# geom_errorbar(aes(ymin = Alpha_Lower_CI, ymax = Alpha_Upper_CI))+
+  theme_minimal()+geom_smooth(method = "lm")+geom_errorbar(aes(ymin=abs(q5)-1, ymax = abs(q95)-1))
+
+##INCOROPORATE UNCERTAINTY HERE
+
+```
+HEAL is not good, because we don't have enough data
+get tau
+```{r}
+
+taudataframe<-data.frame(
+        siteID = character(),
+        tau = numeric(),
+        dbh_max=numeric()
+        )
+
+
+for(site in unique(remote_sensing_updated$siteID)[-6]){
+  
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry),
+                      siteID == site)%>%
+    inner_join(neonregressionoutput)
+  # Filter DBH values to be within the range of interest (<= 50)
+  # observed_dbhs <- observed_dbhs[observed_dbhs >= xmin & observed_dbhs<=50]
+  observed_dbhs <- site_data$dbh
+  
+  if (length(observed_dbhs) < 10) {
+    return(NA)  # Return NA if there aren't enough data points
+  }
+  
+  # Kernel Density Estimation for DBH data
+  kde <- density(observed_dbhs, bw = "nrd0")  # Adjust bandwidth as needed
+  xmin<-min(observed_dbhs)
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= max(observed_dbhs) & kde$x>=xmin],
+    y = kde$y[kde$x <=  max(observed_dbhs) & kde$x>=xmin]
+  )
+  
+  # Filter the KDE results to only keep values near the observed data (threshold = 1.5)
+  filtered_kde <- data.frame(
+    x = kde$x,
+    y = kde$y
+  ) %>%
+    rowwise() %>%
+    filter(any(abs(x - observed_dbhs) <= 0.5)) %>%
+    ungroup()
+  
+  # Update kde$x and kde$y with the filtered values
+  kde <- list(
+    x = filtered_kde$x,
+    y = filtered_kde$y
+  )
+  
+  # Total observed data (number of trees)
+  total_trees <- length(observed_dbhs)
+  
+  # Estimated abundances by multiplying the densities by the total number of trees
+  estimated_abundance <- kde$y * total_trees
+  
+  # Apply log10 transformation to both DBH and abundance
+  log_x <- log10(kde$x)  # Log10 of DBH values
+  log_y <- log10(estimated_abundance)  # Log10 of abundance values
+  
+  # Create a data frame with log-transformed values
+  df <- data.frame(x = log_x, y = log_y) %>%
+    filter(is.infinite(y) == FALSE)
+  
+  # Fit a simple linear regression model to the log-transformed data
+  # fit <- lm(y ~ x, data = df)
+  
+  # psi_value <- ifelse(max(observed_dbhs)/2 < min(observed_dbhs),
+  #                     min(df$x),
+  #                     log10(max(observed_dbhs)/2))
+  # psi_value<-ifelse(30<max(observed_dbhs),
+  #                  log10(30),
+  #                  log10(max(observed_dbhs)/2))
+  # 
+  # psi_value<-df%>%
+  #   filter(y==max(y))%>%
+  #   pull(x)
+  # print(plot)
+  # Fit a piecewise regression model to the linear model
+  # segmented.fit <- segmented(fit, seg.Z = ~x, psi = psi_value)
+  # segmented.fit <- selgmented(fit,  seg.Z = ~x, type = "aic", Kmax = 4)  
+  
+  
+    data<-peaks(df$y)%>%
+      cbind(df)%>%
+      filter(.==TRUE)
+    
+    data<-data%>%
+      filter(y>0)
+    # Apply 10^x to every numeric column
+   
+   breakpoint = data%>%
+          filter(x<=quantile(log10(observed_dbhs), 0.75))%>%
+          filter(x==max(x))%>%
+          pull(x)
+
+   # if(breakpoint<log10(10)){
+   #   breakpoint <- log10(10)
+   # }
+   final_data<-df%>%
+        filter(x>=breakpoint)%>%
+     ##For filtering out anything below 10, the xmin
+             filter(x>=1)
+stan_data<-list(
+  N = nrow(site_data),
+  x_min = min(site_data$dbh),
+  x_max=max(site_data$dbh),
+  x=site_data$dbh)
+
+fit1<-sampling(
+  density_2_model,
+  data = stan_data,
+  # warmup = 6000,
+  iter=2000,
+  # warmup=6000,
+  chains = 4
+  # cores=4
+)
+
+tau<-summary(fit1, pars = "tau")$summary[1]
+taudataframe<-taudataframe%>%
+      add_row(
+        siteID = site,
+        tau = tau,
+        dbh_max=max(site_data$dbh)
+        )
+}
+```
+
+
+
+```{r}
+library(splus2R)
+results_df_stan <- data.frame(
+  Alpha_Est = numeric(),
+  # R2=numeric(),
+  Alpha_True = numeric()
+)
+
+for(site in unique(remote_sensing_updated$siteID)[-6]){
+  
+site_data <- subset(remote_sensing_updated%>%
+                        data.frame()%>%
+                        select(-geometry),
+                      siteID == site)%>%
+    inner_join(neonregressionoutput)
+  # Filter DBH values to be within the range of interest (<= 50)
+  # observed_dbhs <- observed_dbhs[observed_dbhs >= xmin & observed_dbhs<=50]
+  observed_dbhs <- site_data$dbh
+  
+  if (length(observed_dbhs) < 10) {
+    return(NA)  # Return NA if there aren't enough data points
+  }
+  
+  # Kernel Density Estimation for DBH data
+  kde <- density(observed_dbhs, bw = "SJ")  # Adjust bandwidth as needed
+  xmin<-min(observed_dbhs)
+  # Truncate the KDE results at x = 50
+  kde <- list(
+    x = kde$x[kde$x <= max(observed_dbhs) & kde$x>=xmin],
+    y = kde$y[kde$x <=  max(observed_dbhs) & kde$x>=xmin]
+  )
+  
+  # Filter the KDE results to only keep values near the observed data (threshold = 1.5)
+  filtered_kde <- data.frame(
+    x = kde$x,
+    y = kde$y
+  ) %>%
+    rowwise() %>%
+    filter(any(abs(x - observed_dbhs) <= 0.5)) %>%
+    ungroup()
+  
+  # Update kde$x and kde$y with the filtered values
+  kde <- list(
+    x = filtered_kde$x,
+    y = filtered_kde$y
+  )
+  
+  # Total observed data (number of trees)
+  total_trees <- length(observed_dbhs)
+  
+  # Estimated abundances by multiplying the densities by the total number of trees
+  estimated_abundance <- kde$y * total_trees
+  
+  # Apply log10 transformation to both DBH and abundance
+  log_x <- log10(kde$x)  # Log10 of DBH values
+  log_y <- log10(estimated_abundance)  # Log10 of abundance values
+  
+  # Create a data frame with log-transformed values
+  df <- data.frame(x = log_x, y = log_y) %>%
+    filter(is.infinite(y) == FALSE)
+  
+  # Fit a simple linear regression model to the log-transformed data
+  # fit <- lm(y ~ x, data = df)
+  
+  # psi_value <- ifelse(max(observed_dbhs)/2 < min(observed_dbhs),
+  #                     min(df$x),
+  #                     log10(max(observed_dbhs)/2))
+  # psi_value<-ifelse(30<max(observed_dbhs),
+  #                  log10(30),
+  #                  log10(max(observed_dbhs)/2))
+  # 
+  # psi_value<-df%>%
+  #   filter(y==max(y))%>%
+  #   pull(x)
+  # print(plot)
+  # Fit a piecewise regression model to the linear model
+  # segmented.fit <- segmented(fit, seg.Z = ~x, psi = psi_value)
+  # segmented.fit <- selgmented(fit,  seg.Z = ~x, type = "aic", Kmax = 4)  
+  
+  
+    data<-peaks(df$y)%>%
+      cbind(df)%>%
+      filter(.==TRUE)
+    
+    data<-data%>%
+      filter(y>0)
+    # Apply 10^x to every numeric column
+   
+   breakpoint = data%>%
+          filter(x<=quantile(log10(observed_dbhs), 0.75))%>%
+          filter(x==max(x))%>%
+          pull(x)
+
+   # if(breakpoint<log10(10)){
+   #   breakpoint <- log10(10)
+   # }
+   final_data<-site_data%>%
+        filter(dbh>=10^breakpoint)
+stan_data<-list(
+  N = nrow(final_data),
+  x_min = min(final_data$dbh),
+  x=final_data$dbh)
+
+  mod<-rstan::sampling(stan_density1_model,
+                         stan_data,
+               iter=4000,
+               chains=4)
+   
+    # selgmented(fit, seg.Z = ~x, type = "score")
+    # Add to results data frame
+    results_df_stan <- results_df_stan %>%
+      add_row(
+        Alpha_Est = posterior::summarise_draws(mod)[1,2]%>%pull(mean),
+        # R2 = summary(fit)$r.squared,
+        Alpha_True = tausandalphasresults%>%
+          filter(siteID == site)%>%
+          pull(mean)
+        
+      )
+    
+}
+
+
+ggplot(results_df_stan, aes(Alpha_True, Alpha_Est))+geom_point()+geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values",
+       x = "True Alpha",
+       y = "Estimated Alpha") +
+  theme_minimal()
+```
+
+
+```{r}
+
+ggplot(results_df_stan, aes(Alpha_True, Alpha_Est))+geom_point()+geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "True vs. Estimated Alpha Values",
+       x = "True Alpha",
+       y = "Estimated Alpha") +
+  theme_minimal()
+```
