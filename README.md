@@ -23,3 +23,4 @@ Combining RS canopy data with ecological theory allows us to estimate both **alp
 - Reconstructed size-abundance distributions spanning from small understory trees to large canopy trees.
 
 ## What's in this repository?
+- **Models for Ntot and alpha:** This folder contains the STAN codes for the two models we developed to estimate **alpha** and **N_tot**. It also contains a ReadMe file explaining how the models work.
