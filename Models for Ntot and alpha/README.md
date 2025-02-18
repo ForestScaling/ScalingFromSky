@@ -3,7 +3,7 @@
 
 This folder contains Stan models designed to estimate tree density and shape parameters for Pareto distributions using observational data. The models are specifically designed to handle truncated distributions and account for observational biases. We include an extra model (density1_simplified.stan) taken from Grady et al. 2024, which is a basic model that just fits a Pareto distribution to data assuming no missing information. There are two key models we developed:
 
-## 1. Pareto Distribution with Adjustment Factor (Model 1)
+## 1. Estimating Alpha (Model 1)
 
 ### Purpose:
 This model estimates the shape parameter (`alpha`) of a truncated Pareto distribution. The model adjusts for observational biases using factors like normalized Leaf Area Index (LAI) and a breakpoint distance, which represent environmental variables affecting tree visibility.
