@@ -1,9 +1,9 @@
 
 # Stan Models for Tree Density and Truncation Analysis
 
-This folder contains Stan models designed to estimate tree density and shape parameters for Pareto distributions using observational data. The models are specifically designed to handle truncated distributions and account for observational biases. There are two key models:
+This folder contains Stan models designed to estimate tree density and shape parameters for Pareto distributions using observational data. The models are specifically designed to handle truncated distributions and account for observational biases. We include an extra model (density1_simplified.stan) taken from Grady et al. 2024, which is a basic model that just fits a Pareto distribution to data assuming no missing information. There are two key models we developed:
 
-## 1. Pareto Distribution with Adjustment Factor (Model 1)
+## 1. Estimating Alpha (Model 1)
 
 ### Purpose:
 This model estimates the shape parameter (`alpha`) of a truncated Pareto distribution. The model adjusts for observational biases using factors like normalized Leaf Area Index (LAI) and a breakpoint distance, which represent environmental variables affecting tree visibility.
@@ -27,7 +27,7 @@ This model estimates the shape parameter (`alpha`) of a truncated Pareto distrib
 2. **Likelihood:** The likelihood is based on the truncated Pareto cumulative distribution function (CDF) within the range `[trunc_point, trunc_upper]`. The model adjusts the likelihood by a factor derived from the LAI and breakpoint distance, which are assumed to penalize the likelihood based on observational biases.
 3. **Adjustment Factor:** An adjustment factor is computed to correct for biases, where a lower LAI and breakpoint distance lead to a stronger penalty in the likelihood.
 
-## 2. Tree Density Estimation with Pre-sampled `alpha` Values (Model 2)
+## 2. Estimating Total Tree Abundance (Model 2)
 
 ### Purpose:
 This model estimates the total number of trees (`N_tot`) with DBH greater than or equal to `x_min` based on observed counts within defined DBH bins. It uses pre-sampled `alpha` values to marginalize over the uncertainty of the shape parameter in the Pareto distribution and adjusts for observational biases.
@@ -79,7 +79,3 @@ Together, these models allow for a comprehensive understanding of tree density a
     fit1 <- sampling(model1, data = data_model1)
     fit2 <- sampling(model2, data = data_model2)
     ```
-
-## Conclusion
-
-These Stan models provide a framework for estimating tree density and distribution in forest ecosystems, accounting for biases due to sampling and environmental factors. By combining truncation modeling with adjustments for observational conditions, they offer a robust way to estimate tree abundance and Pareto distribution parameters.
