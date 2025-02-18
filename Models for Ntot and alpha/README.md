@@ -27,7 +27,7 @@ This model estimates the shape parameter (`alpha`) of a truncated Pareto distrib
 2. **Likelihood:** The likelihood is based on the truncated Pareto cumulative distribution function (CDF) within the range `[trunc_point, trunc_upper]`. The model adjusts the likelihood by a factor derived from the LAI and breakpoint distance, which are assumed to penalize the likelihood based on observational biases.
 3. **Adjustment Factor:** An adjustment factor is computed to correct for biases, where a lower LAI and breakpoint distance lead to a stronger penalty in the likelihood.
 
-## 2. Tree Density Estimation with Pre-sampled `alpha` Values (Model 2)
+## 2. Estimating Total Tree Abundance (Model 2)
 
 ### Purpose:
 This model estimates the total number of trees (`N_tot`) with DBH greater than or equal to `x_min` based on observed counts within defined DBH bins. It uses pre-sampled `alpha` values to marginalize over the uncertainty of the shape parameter in the Pareto distribution and adjusts for observational biases.
