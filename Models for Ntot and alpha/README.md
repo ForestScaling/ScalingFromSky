@@ -66,13 +66,13 @@ Together, these models allow for a comprehensive understanding of tree density a
 
 1. **Pre-sample `alpha` values:** For Model 2, you will need to pre-sample `alpha` values from the posterior of Model 1 or another source.
 2. **Data Preparation:** Ensure that your data is formatted correctly, with appropriate truncation points and observed tree counts.
-3. **Stan Compilation:** To run the models, compile the Stan models in your R environment using the `rstan` package:
+3. **Stan Compilation:** To run the models, compile the Stan models in your R environment using the `rstan` package (or alternatively copy the model code directly into R and then compile it, which we do in the example R scripts in the respository):
 
     ```r
     model1 <- stan_model("model1.stan")
     model2 <- stan_model("model2.stan")
     ```
-
+    
 4. **Sampling:** Once the models are compiled, run the sampling process to estimate the posterior distributions of the parameters:
 
     ```r
