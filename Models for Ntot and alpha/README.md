@@ -1,7 +1,7 @@
 
 # Stan Models for Tree Density and Truncation Analysis
 
-This folder contains Stan models designed to estimate tree density and shape parameters for Pareto distributions using observational data. The models are specifically designed to handle truncated distributions and account for observational biases. We include an extra model (density1_simplified.stan) taken from Grady et al. 2024, which is a basic model that just fits a Pareto distribution to data assuming no missing information. There are two key models we developed:
+This folder contains Stan models designed to estimate tree abundance and shape parameters for Pareto distributions using observational data. The models are specifically designed to handle truncated distributions and account for observational biases. We include an extra model (density1_simplified.stan) taken from Grady et al. 2024, which is a basic model that just fits a Pareto distribution to data assuming no missing information. There are two key models we developed:
 
 ## 1. Estimating Alpha (Model 1)
 
