@@ -153,9 +153,9 @@ newdata1
 library(ranger)
 
 harvpredicse<-predict(rangermodel, newdata1%>%
-                        rbindlist(),
-                      # rename(Max_Height=Max_Height_meters,
-                      #        LON=Lon,LAT=Lat,elevation = ELEV)
+                        rbindlist()%>%
+                      rename(Max_Height=Max_Height_meters,
+                             LON=Lon,LAT=Lat,elevation = ELEV),
                       predict.all=TRUE)
 # Calculate mean and standard deviation for each data point (each row)
 harv_prior_mean <- apply(harvpredicse$predictions, 1, mean) # Mean for each row
@@ -375,6 +375,7 @@ for(site in unique(bencrownfragmented$plot_id)){#unique(remote_sensing_updated$s
       if(length((Leaf_area_index%>%rename(siteID = site)%>%dplyr::filter(siteID == "SERC")%>%pull(Leaf_area_index) / 10))==0){
         next
       }else{
+        bayesian_data<-bencrownfragmented%>%filter(dbh >= 10^breakpoint & dbh<=50)
         stan_data<-list(
           N=bayesian_data%>%nrow(),
           x_min = 10,
@@ -384,8 +385,9 @@ for(site in unique(bencrownfragmented$plot_id)){#unique(remote_sensing_updated$s
           LAI_norm = (Leaf_area_index%>%rename(siteID = site)%>%dplyr::filter(siteID == "HARV")%>%
                         pull(Leaf_area_index) / 10),
           breakpoint_norm=ifelse(breakpoint_norm >0, breakpoint_norm, 0),
-          prior_mean = prior_mean,
-          prior_sd=prior_sd
+          # prior_mean = prior_mean,
+          prior_mean=harvregressionoutput%>%pull(harv_prior_mean)%>%mean(),
+          prior_sd=harvregressionoutput%>%pull(harv_prior_sd)%>%mean()
         )
         
         bayesian_model<-sampling(stan_alpha_laibreak_model, stan_data,
