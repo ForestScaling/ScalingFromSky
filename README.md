@@ -15,6 +15,8 @@ Our approach leverages this idea:
 - **The shape of this distribution** is governed by a parameter **alpha**, which determines how quickly tree abundance decreases with size.
 - **The total abundance of trees (N_tot)** is also critical: it scales the size-abundance curve from relative density to actual tree counts.
 
+**Note**:  We focus on using a Pareto Distribution in this Github code. However, the approach will still work if a Weibull is used for the interpolation process instead and larger trees are included, as *x_breakpoint* (see paper) occurs at intermediate tree DBH sizes. There will just be more than one breakpoint from the regression, from which *x_breakpoint* must be selected.
+
 Combining RS canopy data with ecological theory allows us to estimate both **alpha** and **N_tot**. With these two parameters, we can reconstruct the size-abundance curve for a plot, extending beyond what is visible from the canopy alone.
 
 ### Key Outputs:
