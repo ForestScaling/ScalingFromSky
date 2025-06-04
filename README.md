@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/884536370.svg)](https://doi.org/10.5281/zenodo.15593238)
 
 # ScalingFromSky
 
